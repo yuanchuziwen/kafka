@@ -28,11 +28,17 @@ import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 
+// 测试用的一个 consumer 类
 public class Consumer extends ShutdownableThread {
+    // 封装了一个 KafkaConsumer 对象
     private final KafkaConsumer<Integer, String> consumer;
+    // 消费者订阅的 topic
     private final String topic;
+    // 消费者归属的 group
     private final String groupId;
+    // 消费者可以消费的消息数量
     private final int numMessageToConsume;
+    // 剩余可消费的消息数量
     private int messageRemaining;
     private final CountDownLatch latch;
 
@@ -45,6 +51,7 @@ public class Consumer extends ShutdownableThread {
         super("KafkaConsumerExample", false);
         this.groupId = groupId;
         Properties props = new Properties();
+        // 配置 KafkaConsumer 的属性
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, KafkaProperties.KAFKA_SERVER_URL + ":" + KafkaProperties.KAFKA_SERVER_PORT);
         props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
         instanceId.ifPresent(id -> props.put(ConsumerConfig.GROUP_INSTANCE_ID_CONFIG, id));

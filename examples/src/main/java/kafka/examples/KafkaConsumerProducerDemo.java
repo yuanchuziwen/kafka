@@ -32,6 +32,7 @@ public class KafkaConsumerProducerDemo {
         Consumer consumerThread = new Consumer(KafkaProperties.TOPIC, "DemoConsumer", Optional.empty(), false, 10000, latch);
         consumerThread.start();
 
+        // 阻塞等待 producer 和 consumer 的完成（调用 countdown），或者等到超时 5 min
         if (!latch.await(5, TimeUnit.MINUTES)) {
             throw new TimeoutException("Timeout after 5 minutes waiting for demo producer and consumer to finish");
         }
