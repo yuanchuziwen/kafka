@@ -18,11 +18,11 @@ package org.apache.kafka.common.config;
 
 import org.apache.kafka.common.Configurable;
 import org.apache.kafka.common.KafkaException;
+import org.apache.kafka.common.config.provider.ConfigProvider;
 import org.apache.kafka.common.config.types.Password;
 import org.apache.kafka.common.utils.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.apache.kafka.common.config.provider.ConfigProvider;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -76,17 +76,27 @@ public class AbstractConfig {
      * for zero or more {@link ConfigProvider} that will be used to resolve variables in configuration property
      * values.
      *
+     * 使用 ConfigDef 和配置属性构造配置，这些配置属性可以包括零个或多个{@link ConfigProvider}的属性，这些属性将用于解析配置属性值中的变量。
+     *
      * The originals is a name-value pair configuration properties and optional config provider configs. The
      * value of the configuration can be a variable as defined below or the actual value. This constructor will
      * first instantiate the ConfigProviders using the config provider configs, then it will find all the
      * variables in the values of the originals configurations, attempt to resolve the variables using the named
      * ConfigProviders, and then parse and validate the configurations.
      *
+     * originals 是名称-值对配置属性和可选的配置提供者配置。
+     * 配置的值可以是下面定义的变量或实际值。
+     * 此构造函数将首先使用配置提供者配置实例化ConfigProviders，然后它将在originals配置的值中找到所有变量，尝试使用命名的ConfigProviders解析变量，然后解析和验证配置。
+     *
      * ConfigProvider configs can be passed either as configs in the originals map or in the separate
      * configProviderProps map. If config providers properties are passed in the configProviderProps any config
      * provider properties in originals map will be ignored. If ConfigProvider properties are not provided, the
      * constructor will skip the variable substitution step and will simply validate and parse the supplied
      * configuration.
+     *
+     * ConfigProvider 配置可以作为 originals 映射中的配置或单独的configProviderProps映射中的配置传递。
+     * 如果配置提供者属性在configProviderProps中传递，则originals映射中的任何配置提供者属性将被忽略。
+     * 如果未提供ConfigProvider属性，构造函数将跳过变量替换步骤，只会验证和解析提供的配置。
      *
      * The "{@code config.providers}" configuration property and all configuration properties that begin with the
      * "{@code config.providers.}" prefix are reserved. The "{@code config.providers}" configuration property
@@ -95,8 +105,14 @@ public class AbstractConfig {
      * property specifies the name of the {@link ConfigProvider} implementation class that should be used for
      * the provider.
      *
+     * "{@code config.providers}"配置属性和所有以"{@code config.providers.}"前缀开头的配置属性是保留的。
+     * "{@code config.providers}"配置属性指定配置提供者的名称，以"{@code config.providers..}"前缀开头的属性对应于该命名提供者的属性。
+     * 例如，"{@code config.providers..class}"属性指定应为提供者使用的{@link ConfigProvider}实现类的名称。
+     *
      * The keys for ConfigProvider configs in both originals and configProviderProps will start with the above
      * mentioned "{@code config.providers.}" prefix.
+     *
+     * originals 和 configProviderProps 中的 ConfigProvider 配置的键都将以上述的"{@code config.providers.}"前缀开头。
      *
      * Variables have the form "${providerName:[path:]key}", where "providerName" is the name of a ConfigProvider,
      * "path" is an optional string, and "key" is a required string. This variable is resolved by passing the "key"
@@ -104,28 +120,42 @@ public class AbstractConfig {
      * then used in place of the variable. Variables that cannot be resolved by the AbstractConfig constructor will
      * be left unchanged in the configuration.
      *
+     * 变量的形式为"${providerName:[path:]key}"，其中"providerName"是 ConfigProvider 的名称，"path"是可选字符串，"key"是必需字符串。
+     * 通过将"key"和可选的"path"传递给具有指定名称的 ConfigProvider 来解析此变量，
+     * 然后使用 ConfigProvider 的结果代替变量。无法由 AbstractConfig 构造函数解析的变量将在配置中保持不变。
      *
      * @param definition the definition of the configurations; may not be null
+     *                  配置的定义；不能为空
      * @param originals the configuration properties plus any optional config provider properties;
+     *                  配置属性加上任何可选的配置提供者属性；
      * @param configProviderProps the map of properties of config providers which will be instantiated by
      *        the constructor to resolve any variables in {@code originals}; may be null or empty
+     *                  配置提供者的属性映射，构造函数将实例化这些属性以解析{@code originals}中的任何变量；可以为空或为空
      * @param doLog whether the configurations should be logged
+     *              是否应记录配置
      */
     @SuppressWarnings("unchecked")
     public AbstractConfig(ConfigDef definition, Map<?, ?> originals,  Map<String, ?> configProviderProps, boolean doLog) {
-        /* check that all the keys are really strings */
+        // 检查所有的键是否都是字符串
         for (Map.Entry<?, ?> entry : originals.entrySet())
             if (!(entry.getKey() instanceof String))
                 throw new ConfigException(entry.getKey().toString(), entry.getValue(), "Key must be a string.");
 
+        // 解析配置变量
+        // 内部会返回一个 ResolvingMap，包含 resolvedOriginals 和 originals
+        // 实际使用的时候都会使用 resolvedOriginals
         this.originals = resolveConfigVariables(configProviderProps, (Map<String, Object>) originals);
+        // 根据转入的 ConfigDef 解析配置并生成值
         this.values = definition.parse(this.originals);
+        // 处理解析后的配置，返回的 map 会被用于更新配置
         Map<String, Object> configUpdates = postProcessParsedConfig(Collections.unmodifiableMap(this.values));
         for (Map.Entry<String, Object> update : configUpdates.entrySet()) {
             this.values.put(update.getKey(), update.getValue());
         }
+        // 再次解析配置
         definition.parse(this.values);
         this.definition = definition;
+        // 如果需要，记录所有配置
         if (doLog)
             logAll();
     }
@@ -490,11 +520,19 @@ public class AbstractConfig {
         return objects;
     }
 
+    /**
+     * 从给定的 configMap 中提取潜在的变量配置。
+     * 潜在变量是形式为 "${providerName:[path:]key}" 的元组。
+     *
+     * @param configMap 包含潜在变量的配置映射
+     * @return 包含潜在变量的字符串映射
+     */
     private Map<String, String> extractPotentialVariables(Map<?, ?>  configMap) {
-        // Variables are tuples of the form "${providerName:[path:]key}". From the configMap we extract the subset of configs with string
-        // values as potential variables.
+        // 变量是形式为 "${providerName:[path:]key}" 的元组。从 configMap 中提取具有字符串值的子集作为潜在变量。
         Map<String, String> configMapAsString = new HashMap<>();
+        // 遍历 configMap 的每个键值对
         for (Map.Entry<?, ?> entry : configMap.entrySet()) {
+            // 如果值是字符串，则将其添加到 configMapAsString
             if (entry.getValue() instanceof String)
                 configMapAsString.put((String) entry.getKey(), (String) entry.getValue());
         }
@@ -505,37 +543,57 @@ public class AbstractConfig {
     /**
      * Instantiates given list of config providers and fetches the actual values of config variables from the config providers.
      * returns a map of config key and resolved values.
+     * 实例化给定的配置提供者列表，并从配置提供者那里获取实际的配置变量值。
+     * 返回一个包含配置键和解析值的映射。
+     *
      * @param configProviderProps The map of config provider configs
+     * 配置提供者配置的映射
      * @param originals The map of raw configs.
+     * 原始配置的映射
      * @return map of resolved config variable.
+     * 解析的配置变量映射
      */
     @SuppressWarnings("unchecked")
     private  Map<String, ?> resolveConfigVariables(Map<String, ?> configProviderProps, Map<String, Object> originals) {
+        // 用于存储潜在的变量配置的映射
         Map<String, String> providerConfigString;
+        // 用于存储配置属性的映射
         Map<String, ?> configProperties;
+        // 用于存储已解析的原始配置的映射
         Map<String, Object> resolvedOriginals = new HashMap<>();
-        // As variable configs are strings, parse the originals and obtain the potential variable configs.
+        // 将原始配置中的变量提取为潜在的变量配置
+        // 其实就是把 originals 中的 String 类型的 value 提取出来，然后放到 indirectVariables 中
         Map<String, String> indirectVariables = extractPotentialVariables(originals);
 
         resolvedOriginals.putAll(originals);
+        // 如果 configProviderProps 为空或为空，则使用原始配置
         if (configProviderProps == null || configProviderProps.isEmpty()) {
             providerConfigString = indirectVariables;
             configProperties = originals;
         } else {
+            // 提取 configProviderProps 中的潜在变量配置
+            // 针对传入的 configProviderProps 中的 String 类型的 value 提取出来，然后放到 providerConfigString 中
             providerConfigString = extractPotentialVariables(configProviderProps);
+            // 使用 configProviderProps 作为配置属性
             configProperties = configProviderProps;
         }
+        // 实例化配置提供者
         Map<String, ConfigProvider> providers = instantiateConfigProviders(providerConfigString, configProperties);
 
+        // 如果提供了配置提供者，则转换间接变量
         if (!providers.isEmpty()) {
+            // 创建 ConfigTransformer 并转换间接变量
             ConfigTransformer configTransformer = new ConfigTransformer(providers);
             ConfigTransformerResult result = configTransformer.transform(indirectVariables);
+            // 如果转换结果不为空，则将结果添加到 resolvedOriginals
             if (!result.data().isEmpty()) {
                 resolvedOriginals.putAll(result.data());
             }
         }
+        // 关闭所有配置提供者
         providers.values().forEach(x -> Utils.closeQuietly(x, "config provider"));
 
+        // 返回 ResolvingMap，包含 resolvedOriginals 和 originals
         return new ResolvingMap<>(resolvedOriginals, originals);
     }
 
@@ -678,9 +736,11 @@ public class AbstractConfig {
         public V get(Object key) {
             if (key instanceof String && originals.containsKey(key)) {
                 // Intentionally ignore the result; call just to mark the original entry as used
+                // 故意忽略结果；只是为了标记原始条目已使用
                 originals.get(key);
             }
             // But always use the resolved entry
+            // 但总是使用已解析的条目
             return super.get(key);
         }
     }

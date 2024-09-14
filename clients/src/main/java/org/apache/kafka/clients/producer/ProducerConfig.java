@@ -558,24 +558,28 @@ public class ProducerConfig extends AbstractConfig {
         }
     }
 
-    static Map<String, Object> appendSerializerToConfig(Map<String, Object> configs,
-            Serializer<?> keySerializer,
-            Serializer<?> valueSerializer) {
-        // 会另起一个 map
-        Map<String, Object> newConfigs = new HashMap<>(configs);
-        if (keySerializer != null)
-            newConfigs.put(KEY_SERIALIZER_CLASS_CONFIG, keySerializer.getClass());
-        if (valueSerializer != null)
-            newConfigs.put(VALUE_SERIALIZER_CLASS_CONFIG, valueSerializer.getClass());
-        return newConfigs;
+    // 基于 map 构造一个 ProducerConfig 对象
+    public ProducerConfig(Map<String, Object> props) {
+        // 会调用父类 AbstractConfig 的构造方法
+        // CONFIG 是 producer 端的一个静态的配置限制信息
+        super(CONFIG, props);
     }
 
     public ProducerConfig(Properties props) {
         super(CONFIG, props);
     }
 
-    public ProducerConfig(Map<String, Object> props) {
-        super(CONFIG, props);
+    static Map<String, Object> appendSerializerToConfig(Map<String, Object> configs,
+            Serializer<?> keySerializer,
+            Serializer<?> valueSerializer) {
+        // 会另起一个 map
+        Map<String, Object> newConfigs = new HashMap<>(configs);
+        // 使用入参的 keySerializer 和 valueSerializer 中的配置替换掉 newConfigs 中的 keySerializer 和 valueSerializer
+        if (keySerializer != null)
+            newConfigs.put(KEY_SERIALIZER_CLASS_CONFIG, keySerializer.getClass());
+        if (valueSerializer != null)
+            newConfigs.put(VALUE_SERIALIZER_CLASS_CONFIG, valueSerializer.getClass());
+        return newConfigs;
     }
 
     ProducerConfig(Map<?, ?> props, boolean doLog) {
