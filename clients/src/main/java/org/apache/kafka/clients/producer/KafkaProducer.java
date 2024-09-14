@@ -329,6 +329,24 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
     /** 事务管理器 */
     private final TransactionManager transactionManager;
 
+    /*
+    TODO
+    构造函数解释:
+    最底层的是：KafkaProducer(ProducerConfig config,
+                  Serializer<K> keySerializer,
+                  Serializer<V> valueSerializer,
+                  ProducerMetadata metadata,
+                  KafkaClient kafkaClient,
+                  ProducerInterceptors<K, V> interceptors,
+                  Time time)
+
+    对外开放的有两种方法：
+    1. 接收 map 参数
+    2. 接收 properties 参数
+
+    properties 会被转为 map；map 会被转为 ProducerConfig 对象，然后调用最底层的构造函数；
+     */
+
     /**
      * A producer is instantiated by providing a set of key-value pairs as configuration. Valid configuration strings
      * are documented <a href="http://kafka.apache.org/documentation.html#producerconfigs">here</a>. Values can be
@@ -371,6 +389,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      */
     public KafkaProducer(Map<String, Object> configs, Serializer<K> keySerializer, Serializer<V> valueSerializer) {
         // 入参中的 keySerializer 和 valueSerializer 的优先级高于 configs 中的序列化器配置
+        // 会将入参中的序列化器追加到 ProducerConfig 中
         this(new ProducerConfig(ProducerConfig.appendSerializerToConfig(configs, keySerializer, valueSerializer)),
                 keySerializer, valueSerializer, null, null, null, Time.SYSTEM);
     }
@@ -404,6 +423,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      *                         be called in the producer when the serializer is passed in directly.
      */
     public KafkaProducer(Properties properties, Serializer<K> keySerializer, Serializer<V> valueSerializer) {
+        // 将 properties 转为 map，然后调用 KafkaProducer(Map<String, Object> configs) 构造函数
         this(Utils.propsToMap(properties), keySerializer, valueSerializer);
     }
 
