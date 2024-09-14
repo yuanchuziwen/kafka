@@ -47,13 +47,22 @@ public class AbstractConfig {
      * Configs for which values have been requested, used to detect unused configs.
      * This set must be concurrent modifiable and iterable. It will be modified
      * when directly accessed or as a result of RecordingMap access.
+     *
+     * 用于检测未使用的配置的已请求值。
+     * 此集合必须是并发可修改和可迭代的。当直接访问或作为RecordingMap访问的结果时，它将被修改。
      */
     private final Set<String> used = ConcurrentHashMap.newKeySet();
 
-    /* the original values passed in by the user */
+    /*
+    * the original values passed in by the user
+    * 由用户传入的原始值
+    */
     private final Map<String, ?> originals;
 
-    /* the parsed values */
+    /*
+    * the parsed values
+    * 解析后的值
+    */
     private final Map<String, Object> values;
 
     private final ConfigDef definition;
@@ -651,9 +660,13 @@ public class AbstractConfig {
      * any access to a value for a key needs to be recorded on the originals map.
      * The resolved configs are kept in the inherited map and are therefore mutable, though any
      * mutations are not applied to the originals.
+     * ResolvingMap 会跟踪原始 map 实例和已解析的配置。
+     * 原始配置在一个单独的嵌套 map 中进行跟踪，可能是 RecordingMap；因此，对键的任何值的访问都需要在原始 map 上记录。
+     * 已解析的配置保存在继承的 map 中，因此是可变的，尽管任何更改都不会应用于原始配置。
      */
     private static class ResolvingMap<V> extends HashMap<String, V> {
 
+        // 内部 map 用于存储原始配置
         private final Map<String, ?> originals;
 
         ResolvingMap(Map<String, ? extends V> resolved, Map<String, ?> originals) {

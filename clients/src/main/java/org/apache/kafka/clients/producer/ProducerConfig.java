@@ -55,6 +55,8 @@ public class ProducerConfig extends AbstractConfig {
 
     private static final ConfigDef CONFIG;
 
+    // --- producer 可以配置的参数 ---
+
     /** <code>bootstrap.servers</code> */
     public static final String BOOTSTRAP_SERVERS_CONFIG = CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG;
 
@@ -289,145 +291,190 @@ public class ProducerConfig extends AbstractConfig {
 
     private static final AtomicInteger PRODUCER_CLIENT_ID_SEQUENCE = new AtomicInteger(1);
 
+    // 静态代码块，明确每个配置项的对应的值的类型、重要性、默认值等
     static {
-        CONFIG = new ConfigDef().define(BOOTSTRAP_SERVERS_CONFIG, Type.LIST, Collections.emptyList(), new ConfigDef.NonNullValidator(), Importance.HIGH, CommonClientConfigs.BOOTSTRAP_SERVERS_DOC)
-                                .define(CLIENT_DNS_LOOKUP_CONFIG,
-                                        Type.STRING,
-                                        ClientDnsLookup.USE_ALL_DNS_IPS.toString(),
-                                        in(ClientDnsLookup.USE_ALL_DNS_IPS.toString(),
-                                           ClientDnsLookup.RESOLVE_CANONICAL_BOOTSTRAP_SERVERS_ONLY.toString()),
-                                        Importance.MEDIUM,
-                                        CommonClientConfigs.CLIENT_DNS_LOOKUP_DOC)
-                                .define(BUFFER_MEMORY_CONFIG, Type.LONG, 32 * 1024 * 1024L, atLeast(0L), Importance.HIGH, BUFFER_MEMORY_DOC)
-                                .define(RETRIES_CONFIG, Type.INT, Integer.MAX_VALUE, between(0, Integer.MAX_VALUE), Importance.HIGH, RETRIES_DOC)
-                                .define(ACKS_CONFIG,
-                                        Type.STRING,
-                                        "all",
-                                        in("all", "-1", "0", "1"),
-                                        Importance.LOW,
-                                        ACKS_DOC)
-                                .define(COMPRESSION_TYPE_CONFIG, Type.STRING, "none", Importance.HIGH, COMPRESSION_TYPE_DOC)
-                                .define(BATCH_SIZE_CONFIG, Type.INT, 16384, atLeast(0), Importance.MEDIUM, BATCH_SIZE_DOC)
-                                .define(LINGER_MS_CONFIG, Type.LONG, 0, atLeast(0), Importance.MEDIUM, LINGER_MS_DOC)
-                                .define(DELIVERY_TIMEOUT_MS_CONFIG, Type.INT, 120 * 1000, atLeast(0), Importance.MEDIUM, DELIVERY_TIMEOUT_MS_DOC)
-                                .define(CLIENT_ID_CONFIG, Type.STRING, "", Importance.MEDIUM, CommonClientConfigs.CLIENT_ID_DOC)
-                                .define(SEND_BUFFER_CONFIG, Type.INT, 128 * 1024, atLeast(CommonClientConfigs.SEND_BUFFER_LOWER_BOUND), Importance.MEDIUM, CommonClientConfigs.SEND_BUFFER_DOC)
-                                .define(RECEIVE_BUFFER_CONFIG, Type.INT, 32 * 1024, atLeast(CommonClientConfigs.RECEIVE_BUFFER_LOWER_BOUND), Importance.MEDIUM, CommonClientConfigs.RECEIVE_BUFFER_DOC)
-                                .define(MAX_REQUEST_SIZE_CONFIG,
-                                        Type.INT,
-                                        1024 * 1024,
-                                        atLeast(0),
-                                        Importance.MEDIUM,
-                                        MAX_REQUEST_SIZE_DOC)
-                                .define(RECONNECT_BACKOFF_MS_CONFIG, Type.LONG, 50L, atLeast(0L), Importance.LOW, CommonClientConfigs.RECONNECT_BACKOFF_MS_DOC)
-                                .define(RECONNECT_BACKOFF_MAX_MS_CONFIG, Type.LONG, 1000L, atLeast(0L), Importance.LOW, CommonClientConfigs.RECONNECT_BACKOFF_MAX_MS_DOC)
-                                .define(RETRY_BACKOFF_MS_CONFIG, Type.LONG, 100L, atLeast(0L), Importance.LOW, CommonClientConfigs.RETRY_BACKOFF_MS_DOC)
-                                .define(MAX_BLOCK_MS_CONFIG,
-                                        Type.LONG,
-                                        60 * 1000,
-                                        atLeast(0),
-                                        Importance.MEDIUM,
-                                        MAX_BLOCK_MS_DOC)
-                                .define(REQUEST_TIMEOUT_MS_CONFIG,
-                                        Type.INT,
-                                        30 * 1000,
-                                        atLeast(0),
-                                        Importance.MEDIUM,
-                                        REQUEST_TIMEOUT_MS_DOC)
-                                .define(METADATA_MAX_AGE_CONFIG, Type.LONG, 5 * 60 * 1000, atLeast(0), Importance.LOW, METADATA_MAX_AGE_DOC)
-                                .define(METADATA_MAX_IDLE_CONFIG,
-                                        Type.LONG,
-                                        5 * 60 * 1000,
-                                        atLeast(5000),
-                                        Importance.LOW,
-                                        METADATA_MAX_IDLE_DOC)
-                                .define(METRICS_SAMPLE_WINDOW_MS_CONFIG,
-                                        Type.LONG,
-                                        30000,
-                                        atLeast(0),
-                                        Importance.LOW,
-                                        CommonClientConfigs.METRICS_SAMPLE_WINDOW_MS_DOC)
-                                .define(METRICS_NUM_SAMPLES_CONFIG, Type.INT, 2, atLeast(1), Importance.LOW, CommonClientConfigs.METRICS_NUM_SAMPLES_DOC)
-                                .define(METRICS_RECORDING_LEVEL_CONFIG,
-                                        Type.STRING,
-                                        Sensor.RecordingLevel.INFO.toString(),
-                                        in(Sensor.RecordingLevel.INFO.toString(), Sensor.RecordingLevel.DEBUG.toString(), Sensor.RecordingLevel.TRACE.toString()),
-                                        Importance.LOW,
-                                        CommonClientConfigs.METRICS_RECORDING_LEVEL_DOC)
-                                .define(METRIC_REPORTER_CLASSES_CONFIG,
-                                        Type.LIST,
-                                        Collections.emptyList(),
-                                        new ConfigDef.NonNullValidator(),
-                                        Importance.LOW,
-                                        CommonClientConfigs.METRIC_REPORTER_CLASSES_DOC)
-                                .define(MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION,
-                                        Type.INT,
-                                        5,
-                                        atLeast(1),
-                                        Importance.LOW,
-                                        MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION_DOC)
-                                .define(KEY_SERIALIZER_CLASS_CONFIG,
-                                        Type.CLASS,
-                                        Importance.HIGH,
-                                        KEY_SERIALIZER_CLASS_DOC)
-                                .define(VALUE_SERIALIZER_CLASS_CONFIG,
-                                        Type.CLASS,
-                                        Importance.HIGH,
-                                        VALUE_SERIALIZER_CLASS_DOC)
-                                .define(SOCKET_CONNECTION_SETUP_TIMEOUT_MS_CONFIG,
-                                        Type.LONG,
-                                        CommonClientConfigs.DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT_MS,
-                                        Importance.MEDIUM,
-                                        CommonClientConfigs.SOCKET_CONNECTION_SETUP_TIMEOUT_MS_DOC)
-                                .define(SOCKET_CONNECTION_SETUP_TIMEOUT_MAX_MS_CONFIG,
-                                        Type.LONG,
-                                        CommonClientConfigs.DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT_MAX_MS,
-                                        Importance.MEDIUM,
-                                        CommonClientConfigs.SOCKET_CONNECTION_SETUP_TIMEOUT_MAX_MS_DOC)
-                                /* default is set to be a bit lower than the server default (10 min), to avoid both client and server closing connection at same time */
-                                .define(CONNECTIONS_MAX_IDLE_MS_CONFIG,
-                                        Type.LONG,
-                                        9 * 60 * 1000,
-                                        Importance.MEDIUM,
-                                        CommonClientConfigs.CONNECTIONS_MAX_IDLE_MS_DOC)
-                                .define(PARTITIONER_CLASS_CONFIG,
-                                        Type.CLASS,
-                                        DefaultPartitioner.class,
-                                        Importance.MEDIUM, PARTITIONER_CLASS_DOC)
-                                .define(INTERCEPTOR_CLASSES_CONFIG,
-                                        Type.LIST,
-                                        Collections.emptyList(),
-                                        new ConfigDef.NonNullValidator(),
-                                        Importance.LOW,
-                                        INTERCEPTOR_CLASSES_DOC)
-                                .define(CommonClientConfigs.SECURITY_PROTOCOL_CONFIG,
-                                        Type.STRING,
-                                        CommonClientConfigs.DEFAULT_SECURITY_PROTOCOL,
-                                        Importance.MEDIUM,
-                                        CommonClientConfigs.SECURITY_PROTOCOL_DOC)
-                                .define(SECURITY_PROVIDERS_CONFIG,
-                                        Type.STRING,
-                                        null,
-                                        Importance.LOW,
-                                        SECURITY_PROVIDERS_DOC)
-                                .withClientSslSupport()
-                                .withClientSaslSupport()
-                                .define(ENABLE_IDEMPOTENCE_CONFIG,
-                                        Type.BOOLEAN,
-                                        true,
-                                        Importance.LOW,
-                                        ENABLE_IDEMPOTENCE_DOC)
-                                .define(TRANSACTION_TIMEOUT_CONFIG,
-                                        Type.INT,
-                                        60000,
-                                        Importance.LOW,
-                                        TRANSACTION_TIMEOUT_DOC)
-                                .define(TRANSACTIONAL_ID_CONFIG,
-                                        Type.STRING,
-                                        null,
-                                        new ConfigDef.NonEmptyString(),
-                                        Importance.LOW,
-                                        TRANSACTIONAL_ID_DOC);
+        CONFIG = new ConfigDef()
+                .define(BOOTSTRAP_SERVERS_CONFIG,
+                        Type.LIST,
+                        Collections.emptyList(),
+                        new ConfigDef.NonNullValidator(),
+                        Importance.HIGH,
+                        CommonClientConfigs.BOOTSTRAP_SERVERS_DOC)
+                .define(CLIENT_DNS_LOOKUP_CONFIG,
+                        Type.STRING,
+                        ClientDnsLookup.USE_ALL_DNS_IPS.toString(),
+                        in(ClientDnsLookup.USE_ALL_DNS_IPS.toString(),
+                                ClientDnsLookup.RESOLVE_CANONICAL_BOOTSTRAP_SERVERS_ONLY.toString()),
+                        Importance.MEDIUM,
+                        CommonClientConfigs.CLIENT_DNS_LOOKUP_DOC)
+                .define(BUFFER_MEMORY_CONFIG,
+                        Type.LONG,
+                        32 * 1024 * 1024L,
+                        atLeast(0L),
+                        Importance.HIGH, BUFFER_MEMORY_DOC)
+                .define(RETRIES_CONFIG,
+                        Type.INT,
+                        Integer.MAX_VALUE,
+                        between(0, Integer.MAX_VALUE),
+                        Importance.HIGH, RETRIES_DOC)
+                .define(ACKS_CONFIG,
+                        Type.STRING,
+                        "all",
+                        in("all", "-1", "0", "1"),
+                        Importance.LOW,
+                        ACKS_DOC)
+                .define(COMPRESSION_TYPE_CONFIG,
+                        Type.STRING,
+                        "none",
+                        Importance.HIGH, COMPRESSION_TYPE_DOC)
+                .define(BATCH_SIZE_CONFIG,
+                        Type.INT,
+                        16384,
+                        atLeast(0),
+                        Importance.MEDIUM, BATCH_SIZE_DOC)
+                .define(LINGER_MS_CONFIG,
+                        Type.LONG,
+                        0,
+                        atLeast(0),
+                        Importance.MEDIUM,
+                        LINGER_MS_DOC)
+                .define(DELIVERY_TIMEOUT_MS_CONFIG,
+                        Type.INT,
+                        120 * 1000,
+                        atLeast(0),
+                        Importance.MEDIUM, DELIVERY_TIMEOUT_MS_DOC)
+                .define(CLIENT_ID_CONFIG,
+                        Type.STRING,
+                        "",
+                        Importance.MEDIUM,
+                        CommonClientConfigs.CLIENT_ID_DOC)
+                .define(SEND_BUFFER_CONFIG,
+                        Type.INT,
+                        128 * 1024,
+                        atLeast(CommonClientConfigs.SEND_BUFFER_LOWER_BOUND),
+                        Importance.MEDIUM,
+                        CommonClientConfigs.SEND_BUFFER_DOC)
+                .define(RECEIVE_BUFFER_CONFIG,
+                        Type.INT,
+                        32 * 1024,
+                        atLeast(CommonClientConfigs.RECEIVE_BUFFER_LOWER_BOUND),
+                        Importance.MEDIUM,
+                        CommonClientConfigs.RECEIVE_BUFFER_DOC)
+                .define(MAX_REQUEST_SIZE_CONFIG,
+                        Type.INT,
+                        1024 * 1024,
+                        atLeast(0),
+                        Importance.MEDIUM,
+                        MAX_REQUEST_SIZE_DOC)
+                .define(RECONNECT_BACKOFF_MS_CONFIG, Type.LONG, 50L, atLeast(0L), Importance.LOW, CommonClientConfigs.RECONNECT_BACKOFF_MS_DOC)
+                .define(RECONNECT_BACKOFF_MAX_MS_CONFIG, Type.LONG, 1000L, atLeast(0L), Importance.LOW, CommonClientConfigs.RECONNECT_BACKOFF_MAX_MS_DOC)
+                .define(RETRY_BACKOFF_MS_CONFIG, Type.LONG, 100L, atLeast(0L), Importance.LOW, CommonClientConfigs.RETRY_BACKOFF_MS_DOC)
+                .define(MAX_BLOCK_MS_CONFIG,
+                        Type.LONG,
+                        60 * 1000,
+                        atLeast(0),
+                        Importance.MEDIUM,
+                        MAX_BLOCK_MS_DOC)
+                .define(REQUEST_TIMEOUT_MS_CONFIG,
+                        Type.INT,
+                        30 * 1000,
+                        atLeast(0),
+                        Importance.MEDIUM,
+                        REQUEST_TIMEOUT_MS_DOC)
+                .define(METADATA_MAX_AGE_CONFIG, Type.LONG, 5 * 60 * 1000, atLeast(0), Importance.LOW, METADATA_MAX_AGE_DOC)
+                .define(METADATA_MAX_IDLE_CONFIG,
+                        Type.LONG,
+                        5 * 60 * 1000,
+                        atLeast(5000),
+                        Importance.LOW,
+                        METADATA_MAX_IDLE_DOC)
+                .define(METRICS_SAMPLE_WINDOW_MS_CONFIG,
+                        Type.LONG,
+                        30000,
+                        atLeast(0),
+                        Importance.LOW,
+                        CommonClientConfigs.METRICS_SAMPLE_WINDOW_MS_DOC)
+                .define(METRICS_NUM_SAMPLES_CONFIG, Type.INT, 2, atLeast(1), Importance.LOW, CommonClientConfigs.METRICS_NUM_SAMPLES_DOC)
+                .define(METRICS_RECORDING_LEVEL_CONFIG,
+                        Type.STRING,
+                        Sensor.RecordingLevel.INFO.toString(),
+                        in(Sensor.RecordingLevel.INFO.toString(), Sensor.RecordingLevel.DEBUG.toString(), Sensor.RecordingLevel.TRACE.toString()),
+                        Importance.LOW,
+                        CommonClientConfigs.METRICS_RECORDING_LEVEL_DOC)
+                .define(METRIC_REPORTER_CLASSES_CONFIG,
+                        Type.LIST,
+                        Collections.emptyList(),
+                        new ConfigDef.NonNullValidator(),
+                        Importance.LOW,
+                        CommonClientConfigs.METRIC_REPORTER_CLASSES_DOC)
+                .define(MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION,
+                        Type.INT,
+                        5,
+                        atLeast(1),
+                        Importance.LOW,
+                        MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION_DOC)
+                .define(KEY_SERIALIZER_CLASS_CONFIG,
+                        Type.CLASS,
+                        Importance.HIGH,
+                        KEY_SERIALIZER_CLASS_DOC)
+                .define(VALUE_SERIALIZER_CLASS_CONFIG,
+                        Type.CLASS,
+                        Importance.HIGH,
+                        VALUE_SERIALIZER_CLASS_DOC)
+                .define(SOCKET_CONNECTION_SETUP_TIMEOUT_MS_CONFIG,
+                        Type.LONG,
+                        CommonClientConfigs.DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT_MS,
+                        Importance.MEDIUM,
+                        CommonClientConfigs.SOCKET_CONNECTION_SETUP_TIMEOUT_MS_DOC)
+                .define(SOCKET_CONNECTION_SETUP_TIMEOUT_MAX_MS_CONFIG,
+                        Type.LONG,
+                        CommonClientConfigs.DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT_MAX_MS,
+                        Importance.MEDIUM,
+                        CommonClientConfigs.SOCKET_CONNECTION_SETUP_TIMEOUT_MAX_MS_DOC)
+                /* default is set to be a bit lower than the server default (10 min), to avoid both client and server closing connection at same time */
+                .define(CONNECTIONS_MAX_IDLE_MS_CONFIG,
+                        Type.LONG,
+                        9 * 60 * 1000,
+                        Importance.MEDIUM,
+                        CommonClientConfigs.CONNECTIONS_MAX_IDLE_MS_DOC)
+                .define(PARTITIONER_CLASS_CONFIG,
+                        Type.CLASS,
+                        DefaultPartitioner.class,
+                        Importance.MEDIUM, PARTITIONER_CLASS_DOC)
+                .define(INTERCEPTOR_CLASSES_CONFIG,
+                        Type.LIST,
+                        Collections.emptyList(),
+                        new ConfigDef.NonNullValidator(),
+                        Importance.LOW,
+                        INTERCEPTOR_CLASSES_DOC)
+                .define(CommonClientConfigs.SECURITY_PROTOCOL_CONFIG,
+                        Type.STRING,
+                        CommonClientConfigs.DEFAULT_SECURITY_PROTOCOL,
+                        Importance.MEDIUM,
+                        CommonClientConfigs.SECURITY_PROTOCOL_DOC)
+                .define(SECURITY_PROVIDERS_CONFIG,
+                        Type.STRING,
+                        null,
+                        Importance.LOW,
+                        SECURITY_PROVIDERS_DOC)
+                .withClientSslSupport()
+                .withClientSaslSupport()
+                .define(ENABLE_IDEMPOTENCE_CONFIG,
+                        Type.BOOLEAN,
+                        true,
+                        Importance.LOW,
+                        ENABLE_IDEMPOTENCE_DOC)
+                .define(TRANSACTION_TIMEOUT_CONFIG,
+                        Type.INT,
+                        60000,
+                        Importance.LOW,
+                        TRANSACTION_TIMEOUT_DOC)
+                .define(TRANSACTIONAL_ID_CONFIG,
+                        Type.STRING,
+                        null,
+                        new ConfigDef.NonEmptyString(),
+                        Importance.LOW,
+                        TRANSACTIONAL_ID_DOC);
     }
 
     @Override
@@ -514,6 +561,7 @@ public class ProducerConfig extends AbstractConfig {
     static Map<String, Object> appendSerializerToConfig(Map<String, Object> configs,
             Serializer<?> keySerializer,
             Serializer<?> valueSerializer) {
+        // 会另起一个 map
         Map<String, Object> newConfigs = new HashMap<>(configs);
         if (keySerializer != null)
             newConfigs.put(KEY_SERIALIZER_CLASS_CONFIG, keySerializer.getClass());
