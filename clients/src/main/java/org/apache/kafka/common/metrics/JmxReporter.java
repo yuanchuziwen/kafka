@@ -50,29 +50,42 @@ import java.util.regex.PatternSyntaxException;
  */
 public class JmxReporter implements MetricsReporter {
 
+    // JMX指标配置的前缀
     public static final String METRICS_CONFIG_PREFIX = "metrics.jmx.";
 
+    // 排除指标的配置键
     public static final String EXCLUDE_CONFIG = METRICS_CONFIG_PREFIX + "exclude";
+    // 排除指标的配置键（别名，已弃用）
     public static final String EXCLUDE_CONFIG_ALIAS = METRICS_CONFIG_PREFIX + "blacklist";
 
+    // 包含指标的配置键
     public static final String INCLUDE_CONFIG = METRICS_CONFIG_PREFIX + "include";
+    // 包含指标的配置键（别名，已弃用）
     public static final String INCLUDE_CONFIG_ALIAS = METRICS_CONFIG_PREFIX + "whitelist";
 
-
+    // 可重新配置的配置项集合
     public static final Set<String> RECONFIGURABLE_CONFIGS = Utils.mkSet(INCLUDE_CONFIG,
                                                                          INCLUDE_CONFIG_ALIAS,
                                                                          EXCLUDE_CONFIG,
                                                                          EXCLUDE_CONFIG_ALIAS);
 
+    // 默认包含所有指标的正则表达式
     public static final String DEFAULT_INCLUDE = ".*";
+    // 默认不排除任何指标的正则表达式
     public static final String DEFAULT_EXCLUDE = "";
 
+    // 日志记录器
     private static final Logger log = LoggerFactory.getLogger(JmxReporter.class);
+    // 用于同步的锁对象
     private static final Object LOCK = new Object();
+    // JMX指标的前缀
     private String prefix;
+    // 存储MBean的映射
     private final Map<String, KafkaMbean> mbeans = new HashMap<>();
+    // MBean名称的过滤器
     private Predicate<String> mbeanPredicate = s -> true;
 
+    // 默认构造函数
     public JmxReporter() {
         this("");
     }
@@ -82,6 +95,11 @@ public class JmxReporter implements MetricsReporter {
      *  @deprecated Since 2.6.0. Use {@link JmxReporter#JmxReporter()}
      *  Initialize JmxReporter with {@link JmxReporter#contextChange(MetricsContext)}
      *  Populate prefix by adding _namespace/prefix key value pair to {@link MetricsContext}
+     * 
+     * 创建一个 JMX 报告器，为所有指标添加给定的前缀。
+     * @deprecated 自 2.6.0 版本起。使用 {@link JmxReporter#JmxReporter()}
+     * 使用 {@link JmxReporter#contextChange(MetricsContext)} 初始化JmxReporter
+     * 通过向 {@link MetricsContext} 添加 _namespace/prefix 键值对来设置前缀
      */
     @Deprecated
     public JmxReporter(String prefix) {
