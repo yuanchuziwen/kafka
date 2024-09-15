@@ -24,6 +24,7 @@ import java.util.List;
 
 public class ClusterResourceListeners {
 
+    // 封装了 ClusterResourceListener 的列表，方便实现触发所有 ClusterResourceListener 的 onUpdate 方法
     private final List<ClusterResourceListener> clusterResourceListeners;
 
     public ClusterResourceListeners() {
@@ -32,6 +33,8 @@ public class ClusterResourceListeners {
 
     /**
      * Add only if the candidate implements {@link ClusterResourceListener}.
+     * 当且仅当 candidate 实现了 ClusterResourceListener 接口时才添加
+     *
      * @param candidate Object which might implement {@link ClusterResourceListener}
      */
     public void maybeAdd(Object candidate) {
@@ -42,6 +45,8 @@ public class ClusterResourceListeners {
 
     /**
      * Add all items who implement {@link ClusterResourceListener} from the list.
+     * 将列表中实现了 ClusterResourceListener 接口的所有项添加
+     *
      * @param candidateList List of objects which might implement {@link ClusterResourceListener}
      */
     public void maybeAddAll(List<?> candidateList) {
@@ -52,6 +57,8 @@ public class ClusterResourceListeners {
 
     /**
      * Send the updated cluster metadata to all {@link ClusterResourceListener}.
+     * 向所有 ClusterResourceListener 发送更新的集群元数据
+     *
      * @param cluster Cluster metadata
      */
     public void onUpdate(ClusterResource cluster) {

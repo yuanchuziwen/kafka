@@ -25,6 +25,8 @@ import java.util.concurrent.TimeUnit;
 public class KafkaConsumerProducerDemo {
     public static void main(String[] args) throws InterruptedException {
         boolean isAsync = args.length == 0 || !args[0].trim().equalsIgnoreCase("sync");
+        // 会将 latch 传入 Producer 和 Consumer，Producer 和 Consumer 会在完成后调用 latch.countDown()
+        // 然后主线程会 wait，一直到 latch 的 count 为 0；即 Producer 和 Consumer 都完成后，主线程才会继续执行
         CountDownLatch latch = new CountDownLatch(2);
         Producer producerThread = new Producer(KafkaProperties.TOPIC, isAsync, null, false, 10000, -1, latch);
         producerThread.start();

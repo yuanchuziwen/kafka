@@ -148,11 +148,14 @@ public class AbstractConfig {
         // 根据转入的 ConfigDef 解析配置并生成值
         this.values = definition.parse(this.originals);
         // 处理解析后的配置，返回的 map 会被用于更新配置
+        // ProducerConfig 会通过这个方法来更新 reconnect、acks、idempotence、transactionalId、client.id 等配置
         Map<String, Object> configUpdates = postProcessParsedConfig(Collections.unmodifiableMap(this.values));
         for (Map.Entry<String, Object> update : configUpdates.entrySet()) {
             this.values.put(update.getKey(), update.getValue());
         }
-        // 再次解析配置
+        // 在 `postProcessParsedConfig` 方法处理并可能更新了一些配置值后，再次调用 `definition.parse` 来重新解析这些更新后的配置值。
+        // 这一步确保所有配置值都是最新的，并且符合配置定义的要求。
+        // 这种双重解析的方式确保了配置的完整性和一致性，特别是在某些配置值可能依赖于其他配置值的情况下。
         definition.parse(this.values);
         this.definition = definition;
         // 如果需要，记录所有配置
@@ -440,6 +443,7 @@ public class AbstractConfig {
             throw new KafkaException("Unexpected element of type " + klass.getClass().getName() + ", expected String or Class");
         if (!t.isInstance(o))
             throw new KafkaException(klass + " is not an instance of " + t.getName());
+        // 如果对象实现了 Configurable 接口，则使用配置对其进行配置
         if (o instanceof Configurable)
             ((Configurable) o).configure(configPairs);
 
@@ -511,9 +515,11 @@ public class AbstractConfig {
         List<T> objects = new ArrayList<>();
         if (classNames == null)
             return objects;
+        // 会将参数传入的 configOverrides 合并到 originals 中
         Map<String, Object> configPairs = originals();
         configPairs.putAll(configOverrides);
         for (Object klass : classNames) {
+            // 实例化给定的类，并使用给定的配置对其进行配置
             Object o = getConfiguredInstance(klass, t, configPairs);
             objects.add(t.cast(o));
         }

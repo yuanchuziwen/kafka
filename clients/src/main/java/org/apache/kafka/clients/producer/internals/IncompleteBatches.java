@@ -24,14 +24,17 @@ import java.util.stream.Collectors;
 /*
  * A thread-safe helper class to hold batches that haven't been acknowledged yet (including those
  * which have and have not been sent).
+ * 一个线程安全的辅助类，用于保存尚未被确认的批次（包括已发送和未发送的批次）。
  */
 class IncompleteBatches {
+    // 内部是一个普通的 HashSet
     private final Set<ProducerBatch> incomplete;
 
     public IncompleteBatches() {
         this.incomplete = new HashSet<>();
     }
 
+    // 但是所有的操作都是在 synchronized 块中进行的
     public void add(ProducerBatch batch) {
         synchronized (incomplete) {
             this.incomplete.add(batch);

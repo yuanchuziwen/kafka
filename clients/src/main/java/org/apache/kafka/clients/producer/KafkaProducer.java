@@ -390,6 +390,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
     public KafkaProducer(Map<String, Object> configs, Serializer<K> keySerializer, Serializer<V> valueSerializer) {
         // 入参中的 keySerializer 和 valueSerializer 的优先级高于 configs 中的序列化器配置
         // 会将入参中的序列化器追加到 ProducerConfig 中
+        // new ProducerConfig 会将所有的参数进行解析，然后统一存储管理
         this(new ProducerConfig(ProducerConfig.appendSerializerToConfig(configs, keySerializer, valueSerializer)),
                 keySerializer, valueSerializer, null, null, null, Time.SYSTEM);
     }
@@ -427,6 +428,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         this(Utils.propsToMap(properties), keySerializer, valueSerializer);
     }
 
+    // 核心构造函数
     // visible for testing
     @SuppressWarnings("unchecked")
     KafkaProducer(ProducerConfig config,
@@ -437,15 +439,13 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                   ProducerInterceptors<K, V> interceptors,
                   Time time) {
         try {
-            // 初始化基本配置
+            // 初始化基本配置，即在 producer 对象的内部成员对象中也持有一些对配置信息的引用
             this.producerConfig = config;
             this.time = time;
-
-            String transactionalId = config.getString(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
-
             this.clientId = config.getString(ProducerConfig.CLIENT_ID_CONFIG);
 
             // 设置日志上下文
+            String transactionalId = config.getString(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
             LogContext logContext;
             if (transactionalId == null)
                 logContext = new LogContext(String.format("[Producer clientId=%s] ", clientId));
@@ -458,28 +458,35 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             /**
              * TODO 研究一下 config.getConfiguredInstance 方法
              */
+            // 根据 producerConfig 中的配置项来初始化 MetricConfig 对象，即初始化监控指标的配置
             Map<String, String> metricTags = Collections.singletonMap("client-id", clientId);
-            MetricConfig metricConfig = new MetricConfig().samples(config.getInt(ProducerConfig.METRICS_NUM_SAMPLES_CONFIG))
+            MetricConfig metricConfig = new MetricConfig()
+                    .samples(config.getInt(ProducerConfig.METRICS_NUM_SAMPLES_CONFIG))
                     .timeWindow(config.getLong(ProducerConfig.METRICS_SAMPLE_WINDOW_MS_CONFIG), TimeUnit.MILLISECONDS)
                     .recordLevel(Sensor.RecordingLevel.forName(config.getString(ProducerConfig.METRICS_RECORDING_LEVEL_CONFIG)))
                     .tags(metricTags);
+            // 根据 producerConfig 来初始化多个监控报告器
             List<MetricsReporter> reporters = config.getConfiguredInstances(ProducerConfig.METRIC_REPORTER_CLASSES_CONFIG,
                     MetricsReporter.class,
                     Collections.singletonMap(ProducerConfig.CLIENT_ID_CONFIG, clientId));
+            // 创建 JMX 监控报告器
             JmxReporter jmxReporter = new JmxReporter();
             jmxReporter.configure(config.originals(Collections.singletonMap(ProducerConfig.CLIENT_ID_CONFIG, clientId)));
+            // 合并两种类型的监控报告器，MetricReporter 和 JmxReporter
             reporters.add(jmxReporter);
+            // 初始化一个指标的上下文对象
             MetricsContext metricsContext = new KafkaMetricsContext(JMX_PREFIX,
                     config.originalsWithPrefix(CommonClientConfigs.METRICS_CONTEXT_PREFIX));
+            // 基于这些指标配置、reporter 等封装一个门面 metrics 对象；其内部包含了所有指标、sensors 等等
             this.metrics = new Metrics(metricConfig, reporters, time, metricsContext);
 
-            // 初始化分区器
+            // 根据 producerConfig 来初始化分区器
             this.partitioner = config.getConfiguredInstance(
                     ProducerConfig.PARTITIONER_CLASS_CONFIG,
                     Partitioner.class,
                     Collections.singletonMap(ProducerConfig.CLIENT_ID_CONFIG, clientId));
 
-            // 配置重试退避时间
+            // 配置重试退避时间，这个值在 ProducerConfig 内部会被 postProcessParsedConfig 方法进行清洗处理
             long retryBackoffMs = config.getLong(ProducerConfig.RETRY_BACKOFF_MS_CONFIG);
 
             // 配置键值序列化器，优先使用入参的 keySerializer 和 valueSerializer
@@ -500,7 +507,8 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                 this.valueSerializer = valueSerializer;
             }
 
-            // 配置拦截器，优先使用入参的 interceptors
+            // 根据 producerConfig 初始化拦截器
+            // 然后将其配置到 producer 内部的成员变量中，但优先使用入参的 interceptors
             List<ProducerInterceptor<K, V>> interceptorList = (List) config.getConfiguredInstances(
                     ProducerConfig.INTERCEPTOR_CLASSES_CONFIG,
                     ProducerInterceptor.class,
@@ -511,6 +519,8 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                 this.interceptors = new ProducerInterceptors<>(interceptorList);
 
             // 配置集群资源监听器
+            // 注意：keySerializer 和 valueSerializer 是来自入参的值；interceptorList 和 reporters 是来自配置文件的值
+            // 入参如果实现了 ClusterResourceListener 接口，那么会被 ClusterResourceListeners 管理，并且当集群资源发生变化时会被通知
             ClusterResourceListeners clusterResourceListeners = configureClusterResourceListeners(keySerializer,
                     valueSerializer, interceptorList, reporters);
 
@@ -526,7 +536,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             this.apiVersions = new ApiVersions();
             this.transactionManager = configureTransactionState(config, logContext);
 
-            // 创建记录累加器
+            // 重要：创建记录累加器
             this.accumulator = new RecordAccumulator(logContext,
                     config.getInt(ProducerConfig.BATCH_SIZE_CONFIG),
                     this.compressionType,
@@ -540,10 +550,12 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                     transactionManager,
                     new BufferPool(this.totalMemorySize, config.getInt(ProducerConfig.BATCH_SIZE_CONFIG), metrics, time, PRODUCER_METRIC_GROUP_NAME));
 
-            // 配置元数据
+            // 解析并验证 cluster 的地址
             List<InetSocketAddress> addresses = ClientUtils.parseAndValidateAddresses(
                     config.getList(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG),
                     config.getString(ProducerConfig.CLIENT_DNS_LOOKUP_CONFIG));
+            // 初始化 producer 的元数据;
+            // metadata 能用于 producer 线程和 sender 线程的通信
             if (metadata != null) {
                 this.metadata = metadata;
             } else {
@@ -557,16 +569,18 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             }
 
             // 创建错误传感器
+            // metrics 内部持有所有的 sensors；然后保证名称唯一；
             this.errors = this.metrics.sensor("errors");
 
-            // 创建和启动发送器线程
+            // 创建和启动发送器线程；然后会交给 ioThread 来启动
             this.sender = newSender(logContext, kafkaClient, this.metadata);
             String ioThreadName = NETWORK_THREAD_PREFIX + " | " + clientId;
             this.ioThread = new KafkaThread(ioThreadName, this.sender, true);
             this.ioThread.start();
 
-            // 完成配置和启动
+            // 记录未使用的配置项
             config.logUnused();
+            // 注册信息，猜测是为了开启 JMX 监控
             AppInfoParser.registerAppInfo(JMX_PREFIX, clientId, metrics, time.milliseconds());
             log.debug("Kafka producer started");
         } catch (Throwable t) {
@@ -1708,7 +1722,9 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * @param candidateLists 候选列表数组
      * @return 配置好的集群资源监听器
      */
-    private ClusterResourceListeners configureClusterResourceListeners(Serializer<K> keySerializer, Serializer<V> valueSerializer, List<?>... candidateLists) {
+    private ClusterResourceListeners configureClusterResourceListeners(Serializer<K> keySerializer,
+                                                                       Serializer<V> valueSerializer,
+                                                                       List<?>... candidateLists) {
         // 创建一个新的集群资源监听器实例
         ClusterResourceListeners clusterResourceListeners = new ClusterResourceListeners();
         

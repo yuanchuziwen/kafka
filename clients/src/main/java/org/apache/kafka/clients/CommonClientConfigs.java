@@ -194,11 +194,14 @@ public class CommonClientConfigs {
     public static Map<String, Object> postProcessReconnectBackoffConfigs(AbstractConfig config,
                                                     Map<String, Object> parsedValues) {
         HashMap<String, Object> rval = new HashMap<>();
+        // 获取 config 对应的原始配置
         Map<String, Object> originalConfig = config.originals();
+        // 如果 reconnect.backoff.ms 配置了，但是 reconnect.backoff.max.ms 没有配置，那么就禁用指数回退
         if ((!originalConfig.containsKey(RECONNECT_BACKOFF_MAX_MS_CONFIG)) &&
             originalConfig.containsKey(RECONNECT_BACKOFF_MS_CONFIG)) {
             log.debug("Disabling exponential reconnect backoff because {} is set, but {} is not.",
                     RECONNECT_BACKOFF_MS_CONFIG, RECONNECT_BACKOFF_MAX_MS_CONFIG);
+            // 将 reconnect.backoff.ms 的值赋给 reconnect.backoff.max.ms
             rval.put(RECONNECT_BACKOFF_MAX_MS_CONFIG, parsedValues.get(RECONNECT_BACKOFF_MS_CONFIG));
         }
         return rval;

@@ -99,6 +99,7 @@ public final class ProducerBatch {
 
     /**
      * Append the record to the current record set and return the relative offset within that record set
+     * 将 record 添加到当前 ProducerBatch 对象中，并返回该记录集中的相对偏移量
      *
      * @return The RecordSend corresponding to this record or null if there isn't sufficient room.
      */
@@ -465,6 +466,9 @@ public final class ProducerBatch {
      * read. This is used in scenarios where we want to ensure a batch ultimately gets aborted, but in which
      * it is not safe to invoke the completion callbacks (e.g. because we are holding a lock, such as
      * when aborting batches in {@link RecordAccumulator}).
+     * 中止记录生成器并重置底层缓冲区的状态。这是在使用 {@link #abort(RuntimeException)} 中中止批处理之前使用的，
+     * 并确保无法读取先前附加的任何记录。这在我们希望确保批处理最终被中止的情况下使用，但在这种情况下，
+     * 不安全调用完成回调（例如，因为我们持有锁，例如在 {@link RecordAccumulator} 中中止批处理时）。
      */
     public void abortRecordAppends() {
         recordsBuilder.abort();

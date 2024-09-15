@@ -22,6 +22,8 @@ import java.io.IOException;
 
 /**
  * Represents a record set which can be transferred to a channel
+ * 代表可以传输到通道的记录集
+ *
  * @see Records
  * @see UnalignedRecords
  */
@@ -29,10 +31,16 @@ public interface TransferableRecords extends BaseRecords {
 
     /**
      * Attempts to write the contents of this buffer to a channel.
+     * 尝试将此缓冲区的内容写入通道
+     *
      * @param channel The channel to write to
+     *                要写入的通道
      * @param position The position in the buffer to write from
+     *                 要写入的缓冲区中的位置
      * @param length The number of bytes to write
+     *               要写入的字节数
      * @return The number of bytes actually written
+     *        实际写入的字节数
      * @throws IOException For any IO errors
      */
     long writeTo(TransferableChannel channel, long position, int length) throws IOException;

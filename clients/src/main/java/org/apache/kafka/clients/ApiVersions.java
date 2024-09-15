@@ -27,7 +27,7 @@ import java.util.Optional;
 /**
  * Maintains node api versions for access outside of NetworkClient (which is where the information is derived).
  * The pattern is akin to the use of {@link Metadata} for topic metadata.
- * 维护节点API版本信息，用于在 NetworkClient 之外访问。
+ * 维护节点 API 版本信息，用于在 NetworkClient 之外访问。
  * 该类的设计意图仅限于在 Kafka 内部使用。
  *
  * NOTE: This class is intended for INTERNAL usage only within Kafka.
@@ -42,6 +42,7 @@ public class ApiVersions {
 
     /**
      * 当前可用的最大生产者魔数
+     * 目前是 v2
      */
     private byte maxUsableProduceMagic = RecordBatch.CURRENT_MAGIC_VALUE;
 

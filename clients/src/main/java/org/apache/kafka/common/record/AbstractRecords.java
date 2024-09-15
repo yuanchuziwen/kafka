@@ -46,6 +46,7 @@ public abstract class AbstractRecords implements Records {
 
     /**
      * Get an iterator over the deep records.
+     *
      * @return An iterator over the records
      */
     @Override
@@ -112,6 +113,8 @@ public abstract class AbstractRecords implements Records {
     /**
      * Get an upper bound estimate on the batch size needed to hold a record with the given fields. This is only
      * an estimate because it does not take into account overhead from the compression algorithm.
+     * 获取批量记录的大小的上限估计，以容纳具有给定字段的记录。
+     * 这只是一个估计，因为它没有考虑压缩算法的开销。
      */
     public static int estimateSizeInBytesUpperBound(byte magic, CompressionType compressionType, byte[] key, byte[] value, Header[] headers) {
         return estimateSizeInBytesUpperBound(magic, compressionType, Utils.wrapNullable(key), Utils.wrapNullable(value), headers);
@@ -133,7 +136,7 @@ public abstract class AbstractRecords implements Records {
 
     /**
      * Return the size of the record batch header.
-     *
+     * <p>
      * For V0 and V1 with no compression, it's unclear if Records.LOG_OVERHEAD or 0 should be chosen. There is no header
      * per batch, but a sequence of batches is preceded by the offset and size. This method returns `0` as it's what
      * `MemoryRecordsBuilder` requires.

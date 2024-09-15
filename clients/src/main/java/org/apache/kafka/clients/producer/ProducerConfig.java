@@ -57,78 +57,96 @@ public class ProducerConfig extends AbstractConfig {
 
     // --- producer 可以配置的参数 ---
 
-    /** <code>bootstrap.servers</code> */
+    /**
+     * <code>bootstrap.servers</code>
+     */
     public static final String BOOTSTRAP_SERVERS_CONFIG = CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG;
 
-    /** <code>client.dns.lookup</code> */
+    /**
+     * <code>client.dns.lookup</code>
+     */
     public static final String CLIENT_DNS_LOOKUP_CONFIG = CommonClientConfigs.CLIENT_DNS_LOOKUP_CONFIG;
 
-    /** <code>metadata.max.age.ms</code> */
+    /**
+     * <code>metadata.max.age.ms</code>
+     */
     public static final String METADATA_MAX_AGE_CONFIG = CommonClientConfigs.METADATA_MAX_AGE_CONFIG;
     private static final String METADATA_MAX_AGE_DOC = CommonClientConfigs.METADATA_MAX_AGE_DOC;
 
-    /** <code>metadata.max.idle.ms</code> */
+    /**
+     * <code>metadata.max.idle.ms</code>
+     */
     public static final String METADATA_MAX_IDLE_CONFIG = "metadata.max.idle.ms";
     private static final String METADATA_MAX_IDLE_DOC =
             "Controls how long the producer will cache metadata for a topic that's idle. If the elapsed " +
-            "time since a topic was last produced to exceeds the metadata idle duration, then the topic's " +
-            "metadata is forgotten and the next access to it will force a metadata fetch request.";
+                    "time since a topic was last produced to exceeds the metadata idle duration, then the topic's " +
+                    "metadata is forgotten and the next access to it will force a metadata fetch request.";
 
-    /** <code>batch.size</code> */
+    /**
+     * <code>batch.size</code>
+     */
     public static final String BATCH_SIZE_CONFIG = "batch.size";
     private static final String BATCH_SIZE_DOC = "The producer will attempt to batch records together into fewer requests whenever multiple records are being sent"
-                                                 + " to the same partition. This helps performance on both the client and the server. This configuration controls the "
-                                                 + "default batch size in bytes. "
-                                                 + "<p>"
-                                                 + "No attempt will be made to batch records larger than this size. "
-                                                 + "<p>"
-                                                 + "Requests sent to brokers will contain multiple batches, one for each partition with data available to be sent. "
-                                                 + "<p>"
-                                                 + "A small batch size will make batching less common and may reduce throughput (a batch size of zero will disable "
-                                                 + "batching entirely). A very large batch size may use memory a bit more wastefully as we will always allocate a "
-                                                 + "buffer of the specified batch size in anticipation of additional records.";
+            + " to the same partition. This helps performance on both the client and the server. This configuration controls the "
+            + "default batch size in bytes. "
+            + "<p>"
+            + "No attempt will be made to batch records larger than this size. "
+            + "<p>"
+            + "Requests sent to brokers will contain multiple batches, one for each partition with data available to be sent. "
+            + "<p>"
+            + "A small batch size will make batching less common and may reduce throughput (a batch size of zero will disable "
+            + "batching entirely). A very large batch size may use memory a bit more wastefully as we will always allocate a "
+            + "buffer of the specified batch size in anticipation of additional records.";
 
-    /** <code>acks</code> */
+    /**
+     * <code>acks</code>
+     */
     public static final String ACKS_CONFIG = "acks";
     private static final String ACKS_DOC = "The number of acknowledgments the producer requires the leader to have received before considering a request complete. This controls the "
-                                           + " durability of records that are sent. The following settings are allowed: "
-                                           + " <ul>"
-                                           + " <li><code>acks=0</code> If set to zero then the producer will not wait for any acknowledgment from the"
-                                           + " server at all. The record will be immediately added to the socket buffer and considered sent. No guarantee can be"
-                                           + " made that the server has received the record in this case, and the <code>retries</code> configuration will not"
-                                           + " take effect (as the client won't generally know of any failures). The offset given back for each record will"
-                                           + " always be set to <code>-1</code>."
-                                           + " <li><code>acks=1</code> This will mean the leader will write the record to its local log but will respond"
-                                           + " without awaiting full acknowledgement from all followers. In this case should the leader fail immediately after"
-                                           + " acknowledging the record but before the followers have replicated it then the record will be lost."
-                                           + " <li><code>acks=all</code> This means the leader will wait for the full set of in-sync replicas to"
-                                           + " acknowledge the record. This guarantees that the record will not be lost as long as at least one in-sync replica"
-                                           + " remains alive. This is the strongest available guarantee. This is equivalent to the acks=-1 setting."
-                                           + "</ul>"
-                                           + "<p>"
-                                           + "Note that enabling idempotence requires this config value to be 'all'."
-                                           + " If conflicting configurations are set and idempotence is not explicitly enabled, idempotence is disabled.";
+            + " durability of records that are sent. The following settings are allowed: "
+            + " <ul>"
+            + " <li><code>acks=0</code> If set to zero then the producer will not wait for any acknowledgment from the"
+            + " server at all. The record will be immediately added to the socket buffer and considered sent. No guarantee can be"
+            + " made that the server has received the record in this case, and the <code>retries</code> configuration will not"
+            + " take effect (as the client won't generally know of any failures). The offset given back for each record will"
+            + " always be set to <code>-1</code>."
+            + " <li><code>acks=1</code> This will mean the leader will write the record to its local log but will respond"
+            + " without awaiting full acknowledgement from all followers. In this case should the leader fail immediately after"
+            + " acknowledging the record but before the followers have replicated it then the record will be lost."
+            + " <li><code>acks=all</code> This means the leader will wait for the full set of in-sync replicas to"
+            + " acknowledge the record. This guarantees that the record will not be lost as long as at least one in-sync replica"
+            + " remains alive. This is the strongest available guarantee. This is equivalent to the acks=-1 setting."
+            + "</ul>"
+            + "<p>"
+            + "Note that enabling idempotence requires this config value to be 'all'."
+            + " If conflicting configurations are set and idempotence is not explicitly enabled, idempotence is disabled.";
 
-    /** <code>linger.ms</code> */
+    /**
+     * <code>linger.ms</code>
+     */
     public static final String LINGER_MS_CONFIG = "linger.ms";
     private static final String LINGER_MS_DOC = "The producer groups together any records that arrive in between request transmissions into a single batched request. "
-                                                + "Normally this occurs only under load when records arrive faster than they can be sent out. However in some circumstances the client may want to "
-                                                + "reduce the number of requests even under moderate load. This setting accomplishes this by adding a small amount "
-                                                + "of artificial delay&mdash;that is, rather than immediately sending out a record the producer will wait for up to "
-                                                + "the given delay to allow other records to be sent so that the sends can be batched together. This can be thought "
-                                                + "of as analogous to Nagle's algorithm in TCP. This setting gives the upper bound on the delay for batching: once "
-                                                + "we get <code>" + BATCH_SIZE_CONFIG + "</code> worth of records for a partition it will be sent immediately regardless of this "
-                                                + "setting, however if we have fewer than this many bytes accumulated for this partition we will 'linger' for the "
-                                                + "specified time waiting for more records to show up. This setting defaults to 0 (i.e. no delay). Setting <code>" + LINGER_MS_CONFIG + "=5</code>, "
-                                                + "for example, would have the effect of reducing the number of requests sent but would add up to 5ms of latency to records sent in the absence of load.";
+            + "Normally this occurs only under load when records arrive faster than they can be sent out. However in some circumstances the client may want to "
+            + "reduce the number of requests even under moderate load. This setting accomplishes this by adding a small amount "
+            + "of artificial delay&mdash;that is, rather than immediately sending out a record the producer will wait for up to "
+            + "the given delay to allow other records to be sent so that the sends can be batched together. This can be thought "
+            + "of as analogous to Nagle's algorithm in TCP. This setting gives the upper bound on the delay for batching: once "
+            + "we get <code>" + BATCH_SIZE_CONFIG + "</code> worth of records for a partition it will be sent immediately regardless of this "
+            + "setting, however if we have fewer than this many bytes accumulated for this partition we will 'linger' for the "
+            + "specified time waiting for more records to show up. This setting defaults to 0 (i.e. no delay). Setting <code>" + LINGER_MS_CONFIG + "=5</code>, "
+            + "for example, would have the effect of reducing the number of requests sent but would add up to 5ms of latency to records sent in the absence of load.";
 
-    /** <code>request.timeout.ms</code> */
+    /**
+     * <code>request.timeout.ms</code>
+     */
     public static final String REQUEST_TIMEOUT_MS_CONFIG = CommonClientConfigs.REQUEST_TIMEOUT_MS_CONFIG;
     private static final String REQUEST_TIMEOUT_MS_DOC = CommonClientConfigs.REQUEST_TIMEOUT_MS_DOC
-        + " This should be larger than <code>replica.lag.time.max.ms</code> (a broker configuration)"
-        + " to reduce the possibility of message duplication due to unnecessary producer retries.";
+            + " This should be larger than <code>replica.lag.time.max.ms</code> (a broker configuration)"
+            + " to reduce the possibility of message duplication due to unnecessary producer retries.";
 
-    /** <code>delivery.timeout.ms</code> */
+    /**
+     * <code>delivery.timeout.ms</code>
+     */
     public static final String DELIVERY_TIMEOUT_MS_CONFIG = "delivery.timeout.ms";
     private static final String DELIVERY_TIMEOUT_MS_DOC = "An upper bound on the time to report success or failure "
             + "after a call to <code>send()</code> returns. This limits the total time that a record will be delayed "
@@ -139,62 +157,86 @@ public class ProducerConfig extends AbstractConfig {
             + "The value of this config should be greater than or equal to the sum of <code>" + REQUEST_TIMEOUT_MS_CONFIG + "</code> "
             + "and <code>" + LINGER_MS_CONFIG + "</code>.";
 
-    /** <code>client.id</code> */
+    /**
+     * <code>client.id</code>
+     */
     public static final String CLIENT_ID_CONFIG = CommonClientConfigs.CLIENT_ID_CONFIG;
 
-    /** <code>send.buffer.bytes</code> */
+    /**
+     * <code>send.buffer.bytes</code>
+     */
     public static final String SEND_BUFFER_CONFIG = CommonClientConfigs.SEND_BUFFER_CONFIG;
 
-    /** <code>receive.buffer.bytes</code> */
+    /**
+     * <code>receive.buffer.bytes</code>
+     */
     public static final String RECEIVE_BUFFER_CONFIG = CommonClientConfigs.RECEIVE_BUFFER_CONFIG;
 
-    /** <code>max.request.size</code> */
+    /**
+     * <code>max.request.size</code>
+     */
     public static final String MAX_REQUEST_SIZE_CONFIG = "max.request.size";
     private static final String MAX_REQUEST_SIZE_DOC =
-        "The maximum size of a request in bytes. This setting will limit the number of record " +
-        "batches the producer will send in a single request to avoid sending huge requests. " +
-        "This is also effectively a cap on the maximum uncompressed record batch size. Note that the server " +
-        "has its own cap on the record batch size (after compression if compression is enabled) which may be different from this.";
+            "The maximum size of a request in bytes. This setting will limit the number of record " +
+                    "batches the producer will send in a single request to avoid sending huge requests. " +
+                    "This is also effectively a cap on the maximum uncompressed record batch size. Note that the server " +
+                    "has its own cap on the record batch size (after compression if compression is enabled) which may be different from this.";
 
-    /** <code>reconnect.backoff.ms</code> */
+    /**
+     * <code>reconnect.backoff.ms</code>
+     */
     public static final String RECONNECT_BACKOFF_MS_CONFIG = CommonClientConfigs.RECONNECT_BACKOFF_MS_CONFIG;
 
-    /** <code>reconnect.backoff.max.ms</code> */
+    /**
+     * <code>reconnect.backoff.max.ms</code>
+     */
     public static final String RECONNECT_BACKOFF_MAX_MS_CONFIG = CommonClientConfigs.RECONNECT_BACKOFF_MAX_MS_CONFIG;
 
-    /** <code>max.block.ms</code> */
+    /**
+     * <code>max.block.ms</code>
+     */
     public static final String MAX_BLOCK_MS_CONFIG = "max.block.ms";
     private static final String MAX_BLOCK_MS_DOC = "The configuration controls how long the <code>KafkaProducer</code>'s <code>send()</code>, <code>partitionsFor()</code>, "
-                                                    + "<code>initTransactions()</code>, <code>sendOffsetsToTransaction()</code>, <code>commitTransaction()</code> "
-                                                    + "and <code>abortTransaction()</code> methods will block. "
-                                                    + "For <code>send()</code> this timeout bounds the total time waiting for both metadata fetch and buffer allocation "
-                                                    + "(blocking in the user-supplied serializers or partitioner is not counted against this timeout). "
-                                                    + "For <code>partitionsFor()</code> this timeout bounds the time spent waiting for metadata if it is unavailable. "
-                                                    + "The transaction-related methods always block, but may timeout if "
-                                                    + "the transaction coordinator could not be discovered or did not respond within the timeout.";
+            + "<code>initTransactions()</code>, <code>sendOffsetsToTransaction()</code>, <code>commitTransaction()</code> "
+            + "and <code>abortTransaction()</code> methods will block. "
+            + "For <code>send()</code> this timeout bounds the total time waiting for both metadata fetch and buffer allocation "
+            + "(blocking in the user-supplied serializers or partitioner is not counted against this timeout). "
+            + "For <code>partitionsFor()</code> this timeout bounds the time spent waiting for metadata if it is unavailable. "
+            + "The transaction-related methods always block, but may timeout if "
+            + "the transaction coordinator could not be discovered or did not respond within the timeout.";
 
-    /** <code>buffer.memory</code> */
+    /**
+     * <code>buffer.memory</code>
+     */
     public static final String BUFFER_MEMORY_CONFIG = "buffer.memory";
     private static final String BUFFER_MEMORY_DOC = "The total bytes of memory the producer can use to buffer records waiting to be sent to the server. If records are "
-                                                    + "sent faster than they can be delivered to the server the producer will block for <code>" + MAX_BLOCK_MS_CONFIG + "</code> after which it will throw an exception."
-                                                    + "<p>"
-                                                    + "This setting should correspond roughly to the total memory the producer will use, but is not a hard bound since "
-                                                    + "not all memory the producer uses is used for buffering. Some additional memory will be used for compression (if "
-                                                    + "compression is enabled) as well as for maintaining in-flight requests.";
+            + "sent faster than they can be delivered to the server the producer will block for <code>" + MAX_BLOCK_MS_CONFIG + "</code> after which it will throw an exception."
+            + "<p>"
+            + "This setting should correspond roughly to the total memory the producer will use, but is not a hard bound since "
+            + "not all memory the producer uses is used for buffering. Some additional memory will be used for compression (if "
+            + "compression is enabled) as well as for maintaining in-flight requests.";
 
-    /** <code>retry.backoff.ms</code> */
+    /**
+     * <code>retry.backoff.ms</code>
+     */
     public static final String RETRY_BACKOFF_MS_CONFIG = CommonClientConfigs.RETRY_BACKOFF_MS_CONFIG;
 
-    /** <code>compression.type</code> */
+    /**
+     * <code>compression.type</code>
+     */
     public static final String COMPRESSION_TYPE_CONFIG = "compression.type";
     private static final String COMPRESSION_TYPE_DOC = "The compression type for all data generated by the producer. The default is none (i.e. no compression). Valid "
-                                                       + " values are <code>none</code>, <code>gzip</code>, <code>snappy</code>, <code>lz4</code>, or <code>zstd</code>. "
-                                                       + "Compression is of full batches of data, so the efficacy of batching will also impact the compression ratio (more batching means better compression).";
+            + " values are <code>none</code>, <code>gzip</code>, <code>snappy</code>, <code>lz4</code>, or <code>zstd</code>. "
+            + "Compression is of full batches of data, so the efficacy of batching will also impact the compression ratio (more batching means better compression).";
 
-    /** <code>metrics.sample.window.ms</code> */
+    /**
+     * <code>metrics.sample.window.ms</code>
+     */
     public static final String METRICS_SAMPLE_WINDOW_MS_CONFIG = CommonClientConfigs.METRICS_SAMPLE_WINDOW_MS_CONFIG;
 
-    /** <code>metrics.num.samples</code> */
+    /**
+     * <code>metrics.num.samples</code>
+     */
     public static final String METRICS_NUM_SAMPLES_CONFIG = CommonClientConfigs.METRICS_NUM_SAMPLES_CONFIG;
 
     /**
@@ -202,21 +244,27 @@ public class ProducerConfig extends AbstractConfig {
      */
     public static final String METRICS_RECORDING_LEVEL_CONFIG = CommonClientConfigs.METRICS_RECORDING_LEVEL_CONFIG;
 
-    /** <code>metric.reporters</code> */
+    /**
+     * <code>metric.reporters</code>
+     */
     public static final String METRIC_REPORTER_CLASSES_CONFIG = CommonClientConfigs.METRIC_REPORTER_CLASSES_CONFIG;
 
     // max.in.flight.requests.per.connection should be less than or equal to 5 when idempotence producer enabled to ensure message ordering
     private static final int MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION_FOR_IDEMPOTENCE = 5;
 
-    /** <code>max.in.flight.requests.per.connection</code> */
+    /**
+     * <code>max.in.flight.requests.per.connection</code>
+     */
     public static final String MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION = "max.in.flight.requests.per.connection";
     private static final String MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION_DOC = "The maximum number of unacknowledged requests the client will send on a single connection before blocking."
-                                                                            + " Note that if this config is set to be greater than 1 and <code>enable.idempotence</code> is set to false, there is a risk of"
-                                                                            + " message re-ordering after a failed send due to retries (i.e., if retries are enabled)."
-                                                                            + " Additionally, enabling idempotence requires this config value to be less than or equal to " + MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION_FOR_IDEMPOTENCE + "."
-                                                                            + " If conflicting configurations are set and idempotence is not explicitly enabled, idempotence is disabled.";
+            + " Note that if this config is set to be greater than 1 and <code>enable.idempotence</code> is set to false, there is a risk of"
+            + " message re-ordering after a failed send due to retries (i.e., if retries are enabled)."
+            + " Additionally, enabling idempotence requires this config value to be less than or equal to " + MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION_FOR_IDEMPOTENCE + "."
+            + " If conflicting configurations are set and idempotence is not explicitly enabled, idempotence is disabled.";
 
-    /** <code>retries</code> */
+    /**
+     * <code>retries</code>
+     */
     public static final String RETRIES_CONFIG = CommonClientConfigs.RETRIES_CONFIG;
     private static final String RETRIES_DOC = "Setting a value greater than zero will cause the client to resend any record whose send fails with a potentially transient error."
             + " Note that this retry is no different than if the client resent the record upon receiving the error."
@@ -232,51 +280,71 @@ public class ProducerConfig extends AbstractConfig {
             + " ordering of records because if two batches are sent to a single partition, and the first fails and is retried but the second"
             + " succeeds, then the records in the second batch may appear first.";
 
-    /** <code>key.serializer</code> */
+    /**
+     * <code>key.serializer</code>
+     */
     public static final String KEY_SERIALIZER_CLASS_CONFIG = "key.serializer";
     public static final String KEY_SERIALIZER_CLASS_DOC = "Serializer class for key that implements the <code>org.apache.kafka.common.serialization.Serializer</code> interface.";
 
-    /** <code>value.serializer</code> */
+    /**
+     * <code>value.serializer</code>
+     */
     public static final String VALUE_SERIALIZER_CLASS_CONFIG = "value.serializer";
     public static final String VALUE_SERIALIZER_CLASS_DOC = "Serializer class for value that implements the <code>org.apache.kafka.common.serialization.Serializer</code> interface.";
 
-    /** <code>socket.connection.setup.timeout.ms</code> */
+    /**
+     * <code>socket.connection.setup.timeout.ms</code>
+     */
     public static final String SOCKET_CONNECTION_SETUP_TIMEOUT_MS_CONFIG = CommonClientConfigs.SOCKET_CONNECTION_SETUP_TIMEOUT_MS_CONFIG;
 
-    /** <code>socket.connection.setup.timeout.max.ms</code> */
+    /**
+     * <code>socket.connection.setup.timeout.max.ms</code>
+     */
     public static final String SOCKET_CONNECTION_SETUP_TIMEOUT_MAX_MS_CONFIG = CommonClientConfigs.SOCKET_CONNECTION_SETUP_TIMEOUT_MAX_MS_CONFIG;
 
-    /** <code>connections.max.idle.ms</code> */
+    /**
+     * <code>connections.max.idle.ms</code>
+     */
     public static final String CONNECTIONS_MAX_IDLE_MS_CONFIG = CommonClientConfigs.CONNECTIONS_MAX_IDLE_MS_CONFIG;
 
-    /** <code>partitioner.class</code> */
+    /**
+     * <code>partitioner.class</code>
+     */
     public static final String PARTITIONER_CLASS_CONFIG = "partitioner.class";
     private static final String PARTITIONER_CLASS_DOC = "Partitioner class that implements the <code>org.apache.kafka.clients.producer.Partitioner</code> interface.";
 
-    /** <code>interceptor.classes</code> */
+    /**
+     * <code>interceptor.classes</code>
+     */
     public static final String INTERCEPTOR_CLASSES_CONFIG = "interceptor.classes";
     public static final String INTERCEPTOR_CLASSES_DOC = "A list of classes to use as interceptors. "
-                                                        + "Implementing the <code>org.apache.kafka.clients.producer.ProducerInterceptor</code> interface allows you to intercept (and possibly mutate) the records "
-                                                        + "received by the producer before they are published to the Kafka cluster. By default, there are no interceptors.";
+            + "Implementing the <code>org.apache.kafka.clients.producer.ProducerInterceptor</code> interface allows you to intercept (and possibly mutate) the records "
+            + "received by the producer before they are published to the Kafka cluster. By default, there are no interceptors.";
 
-    /** <code>enable.idempotence</code> */
+    /**
+     * <code>enable.idempotence</code>
+     */
     public static final String ENABLE_IDEMPOTENCE_CONFIG = "enable.idempotence";
     public static final String ENABLE_IDEMPOTENCE_DOC = "When set to 'true', the producer will ensure that exactly one copy of each message is written in the stream. If 'false', producer "
-                                                        + "retries due to broker failures, etc., may write duplicates of the retried message in the stream. "
-                                                        + "Note that enabling idempotence requires <code>" + MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION + "</code> to be less than or equal to " + MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION_FOR_IDEMPOTENCE
-                                                        + " (with message ordering preserved for any allowable value), <code>" + RETRIES_CONFIG + "</code> to be greater than 0, and <code>"
-                                                        + ACKS_CONFIG + "</code> must be 'all'. "
-                                                        + "<p>"
-                                                        + "Idempotence is enabled by default if no conflicting configurations are set. "
-                                                        + "If conflicting configurations are set and idempotence is not explicitly enabled, idempotence is disabled. "
-                                                        + "If idempotence is explicitly enabled and conflicting configurations are set, a <code>ConfigException</code> is thrown.";
+            + "retries due to broker failures, etc., may write duplicates of the retried message in the stream. "
+            + "Note that enabling idempotence requires <code>" + MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION + "</code> to be less than or equal to " + MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION_FOR_IDEMPOTENCE
+            + " (with message ordering preserved for any allowable value), <code>" + RETRIES_CONFIG + "</code> to be greater than 0, and <code>"
+            + ACKS_CONFIG + "</code> must be 'all'. "
+            + "<p>"
+            + "Idempotence is enabled by default if no conflicting configurations are set. "
+            + "If conflicting configurations are set and idempotence is not explicitly enabled, idempotence is disabled. "
+            + "If idempotence is explicitly enabled and conflicting configurations are set, a <code>ConfigException</code> is thrown.";
 
-    /** <code> transaction.timeout.ms </code> */
+    /**
+     * <code> transaction.timeout.ms </code>
+     */
     public static final String TRANSACTION_TIMEOUT_CONFIG = "transaction.timeout.ms";
     public static final String TRANSACTION_TIMEOUT_DOC = "The maximum amount of time in ms that the transaction coordinator will wait for a transaction status update from the producer before proactively aborting the ongoing transaction." +
             "If this value is larger than the transaction.max.timeout.ms setting in the broker, the request will fail with a <code>InvalidTxnTimeoutException</code> error.";
 
-    /** <code> transactional.id </code> */
+    /**
+     * <code> transactional.id </code>
+     */
     public static final String TRANSACTIONAL_ID_CONFIG = "transactional.id";
     public static final String TRANSACTIONAL_ID_DOC = "The TransactionalId to use for transactional delivery. This enables reliability semantics which span multiple producer sessions since it allows the client to guarantee that transactions using the same TransactionalId have been completed prior to starting any new transactions. If no TransactionalId is provided, then the producer is limited to idempotent delivery. " +
             "If a TransactionalId is configured, <code>enable.idempotence</code> is implied. " +
@@ -477,10 +545,20 @@ public class ProducerConfig extends AbstractConfig {
                         TRANSACTIONAL_ID_DOC);
     }
 
+    /**
+     * Post-process the parsed configuration.
+     * 重写父类的方法，对配置进行后处理；类似 spring 的 BeanPostProcessor？
+     *
+     * @param parsedValues unmodifiable map of current configuration
+     * @return
+     */
     @Override
     protected Map<String, Object> postProcessParsedConfig(final Map<String, Object> parsedValues) {
+        // 针对 reconnect.backoff.ms 和 reconnect.backoff.max.ms 进行后处理
         Map<String, Object> refinedConfigs = CommonClientConfigs.postProcessReconnectBackoffConfigs(this, parsedValues);
+        // 针对 idempotence 相关的配置进行后处理
         postProcessAndValidateIdempotenceConfigs(refinedConfigs);
+        // 针对 client.id 进行后处理
         maybeOverrideClientId(refinedConfigs);
         return refinedConfigs;
     }
@@ -488,8 +566,11 @@ public class ProducerConfig extends AbstractConfig {
     private void maybeOverrideClientId(final Map<String, Object> configs) {
         String refinedClientId;
         boolean userConfiguredClientId = this.originals().containsKey(CLIENT_ID_CONFIG);
+        // 如果用户配置了 client.id，那么就使用用户配置的 client.id；
         if (userConfiguredClientId) {
             refinedClientId = this.getString(CLIENT_ID_CONFIG);
+
+            // 否则，如果开启了事务，则使用 transactional.id 作为 client.id；否则就使用一个自增的序列作为 client.id
         } else {
             String transactionalId = this.getString(TRANSACTIONAL_ID_CONFIG);
             refinedClientId = "producer-" + (transactionalId != null ? transactionalId : PRODUCER_CLIENT_ID_SEQUENCE.getAndIncrement());
@@ -498,16 +579,24 @@ public class ProducerConfig extends AbstractConfig {
     }
 
     private void postProcessAndValidateIdempotenceConfigs(final Map<String, Object> configs) {
+        // 获取原始的配置
         final Map<String, Object> originalConfigs = this.originals();
+        // 获取 acks 配置，如果是 all 则转换为 -1
         final String acksStr = parseAcks(this.getString(ACKS_CONFIG));
+        // 将解析后的 acks 配置放入 configs 中
         configs.put(ACKS_CONFIG, acksStr);
+
+        // 获取用户配置的 enable.idempotence 配置，判断是否开启了幂等性
         final boolean userConfiguredIdempotence = this.originals().containsKey(ENABLE_IDEMPOTENCE_CONFIG);
         boolean idempotenceEnabled = this.getBoolean(ENABLE_IDEMPOTENCE_CONFIG);
         boolean shouldDisableIdempotence = false;
 
         // For idempotence producers, values for `retries` and `acks` and `max.in.flight.requests.per.connection` need validation
+        // 针对幂等性生产者，需要对 retries、acks 和 max.in.flight.requests.per.connection 进行验证
+        // 如果发现用户的人为配置不合法，那么就抛异常；否则就默认不开启幂等性
         if (idempotenceEnabled) {
             final int retries = this.getInt(RETRIES_CONFIG);
+            // 如果开启了一定，那么 retries 必须大于 0
             if (retries == 0) {
                 if (userConfiguredIdempotence) {
                     throw new ConfigException("Must set " + RETRIES_CONFIG + " to non-zero when using the idempotent producer.");
@@ -516,24 +605,26 @@ public class ProducerConfig extends AbstractConfig {
                 shouldDisableIdempotence = true;
             }
 
+            // 如果开启了幂等性，acks 必须是 all（-1）
             final short acks = Short.valueOf(acksStr);
             if (acks != (short) -1) {
                 if (userConfiguredIdempotence) {
                     throw new ConfigException("Must set " + ACKS_CONFIG + " to all in order to use the idempotent " +
-                        "producer. Otherwise we cannot guarantee idempotence.");
+                            "producer. Otherwise we cannot guarantee idempotence.");
                 }
                 log.info("Idempotence will be disabled because {} is set to {}, not set to 'all'.", ACKS_CONFIG, acks);
                 shouldDisableIdempotence = true;
             }
 
+            // 如果开启了幂等性，max.in.flight.requests.per.connection 必须小于等于 5
             final int inFlightConnection = this.getInt(MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION);
             if (MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION_FOR_IDEMPOTENCE < inFlightConnection) {
                 if (userConfiguredIdempotence) {
                     throw new ConfigException("Must set " + MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION + " to at most 5" +
-                        " to use the idempotent producer.");
+                            " to use the idempotent producer.");
                 }
                 log.warn("Idempotence will be disabled because {} is set to {}, which is greater than 5. " +
-                    "Please note that in v4.0.0 and onward, this will become an error.", MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, inFlightConnection);
+                        "Please note that in v4.0.0 and onward, this will become an error.", MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, inFlightConnection);
                 shouldDisableIdempotence = true;
             }
         }
@@ -544,6 +635,7 @@ public class ProducerConfig extends AbstractConfig {
         }
 
         // validate `transaction.id` after validating idempotence dependant configs because `enable.idempotence` config might be overridden
+        // 验证 transaction.id 配置
         boolean userConfiguredTransactions = originalConfigs.containsKey(TRANSACTIONAL_ID_CONFIG);
         if (!idempotenceEnabled && userConfiguredTransactions) {
             throw new ConfigException("Cannot set a " + ProducerConfig.TRANSACTIONAL_ID_CONFIG + " without also enabling idempotence.");
@@ -570,8 +662,8 @@ public class ProducerConfig extends AbstractConfig {
     }
 
     static Map<String, Object> appendSerializerToConfig(Map<String, Object> configs,
-            Serializer<?> keySerializer,
-            Serializer<?> valueSerializer) {
+                                                        Serializer<?> keySerializer,
+                                                        Serializer<?> valueSerializer) {
         // 会另起一个 map
         Map<String, Object> newConfigs = new HashMap<>(configs);
         // 使用入参的 keySerializer 和 valueSerializer 中的配置替换掉 newConfigs 中的 keySerializer 和 valueSerializer
