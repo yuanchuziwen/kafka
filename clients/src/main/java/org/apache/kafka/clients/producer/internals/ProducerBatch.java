@@ -52,8 +52,10 @@ import static org.apache.kafka.common.record.RecordBatch.NO_TIMESTAMP;
 
 /**
  * A batch of records that is or will be sent.
+ * 一个将要发送的记录批次
  *
  * This class is not thread safe and external synchronization must be used when modifying it
+ * 这个类不是线程安全的，当修改它时必须使用外部同步
  */
 public final class ProducerBatch {
 

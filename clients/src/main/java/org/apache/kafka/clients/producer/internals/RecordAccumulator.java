@@ -88,6 +88,8 @@ public final class RecordAccumulator {
     // 传递超时时间（毫秒）
     private final int deliveryTimeoutMs;
     // 缓冲池，用于内存管理
+    // 每次添加消息的时候，就先从 free 中 allocate 一块内存；如果消息发送失败就会 deallocate
+    // 如果消息发送的时候，发现 sender 出问题了；也会触发 deallocate
     private final BufferPool free;
     // 时间实例，用于获取当前时间
     private final Time time;

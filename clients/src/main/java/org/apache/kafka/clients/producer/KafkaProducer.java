@@ -455,9 +455,6 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             log.trace("Starting the Kafka producer");
 
             // 配置和初始化度量指标
-            /**
-             * TODO 研究一下 config.getConfiguredInstance 方法
-             */
             // 根据 producerConfig 中的配置项来初始化 MetricConfig 对象，即初始化监控指标的配置
             Map<String, String> metricTags = Collections.singletonMap("client-id", clientId);
             MetricConfig metricConfig = new MetricConfig()
@@ -466,6 +463,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                     .recordLevel(Sensor.RecordingLevel.forName(config.getString(ProducerConfig.METRICS_RECORDING_LEVEL_CONFIG)))
                     .tags(metricTags);
             // 根据 producerConfig 来初始化多个监控报告器
+            // 这个 getConfiguredInstances 内部的实现就是先通过反射来实例化对象，然后如果这个对象实现了 Configurable 接口，就调用其 configure 方法
             List<MetricsReporter> reporters = config.getConfiguredInstances(ProducerConfig.METRIC_REPORTER_CLASSES_CONFIG,
                     MetricsReporter.class,
                     Collections.singletonMap(ProducerConfig.CLIENT_ID_CONFIG, clientId));

@@ -762,6 +762,9 @@ public class MemoryRecordsBuilder implements AutoCloseable {
     /**
      * Check if we have room for a new record containing the given key/value pair. If no records have been
      * appended, then this returns true.
+     *
+     * 校验是否有足够的空间来添加新的记录。如果没有添加记录，则返回true。
+     *
      */
     public boolean hasRoomFor(long timestamp, byte[] key, byte[] value, Header[] headers) {
         return hasRoomFor(timestamp, wrapNullable(key), wrapNullable(value), headers);
