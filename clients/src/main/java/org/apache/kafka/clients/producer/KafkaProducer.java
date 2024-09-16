@@ -1190,6 +1190,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
     @Override
     public Future<RecordMetadata> send(ProducerRecord<K, V> record, Callback callback) {
         // 拦截记录，记录可能会被修改；此方法不会抛出异常
+        // interceptors 内部封装了所有了 interceptor，调用 onSend 方法，对记录进行拦截；内部是一个 try-catch 代码块，捕获异常，不会抛出异常
         ProducerRecord<K, V> interceptedRecord = this.interceptors.onSend(record);
         // 调用 doSend 方法发送拦截后的记录
         return doSend(interceptedRecord, callback);
@@ -1206,6 +1207,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
     /**
      * Implementation of asynchronously send a record to a topic.
      * 实现异步发送一条记录到一个主题。
+     *
      * 核心逻辑：
      * 1. 验证生产者是否已关闭
      * 2. 等待元数据可用
@@ -1285,13 +1287,17 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             if (transactionManager != null && transactionManager.isTransactional()) {
                 transactionManager.failIfNotReadyForSend();
             }
-            // 将记录附加到累加器
+            // 将记录附加到累加器（注意：abortOnNewBatch=true）
             RecordAccumulator.RecordAppendResult result = accumulator.append(tp, timestamp, serializedKey,
                     serializedValue, headers, interceptCallback, remainingWaitMs, true, nowMs);
 
+            // 如果 result 提示需要创建新的批次
             if (result.abortForNewBatch) {
+                // 记录下之前 partitioner 分区的值
                 int prevPartition = partition;
+                // 触发分区器感知批次的新建
                 partitioner.onNewBatch(record.topic(), cluster, prevPartition);
+                // 重新计算分区
                 partition = partition(record, serializedKey, serializedValue, cluster);
                 tp = new TopicPartition(record.topic(), partition);
                 if (log.isTraceEnabled()) {
@@ -1301,6 +1307,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                 // 创建新的拦截回调
                 interceptCallback = new InterceptorCallback<>(callback, this.interceptors, tp);
 
+                // 再次将记录附加到累加器（注意：abortOnNewBatch=false）
                 result = accumulator.append(tp, timestamp, serializedKey,
                     serializedValue, headers, interceptCallback, remainingWaitMs, false, nowMs);
             }
@@ -1308,10 +1315,12 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             if (transactionManager != null && transactionManager.isTransactional())
                 transactionManager.maybeAddPartitionToTransaction(tp);
 
+            // 如果 result 提示批次已满或新批次已创建，那么就唤醒发送线程
             if (result.batchIsFull || result.newBatchCreated) {
                 log.trace("Waking up the sender since topic {} partition {} is either full or getting a new batch", record.topic(), partition);
                 this.sender.wakeup();
             }
+            // 返回 RecordAccumulator 给的 append 方法返回的 Future 对象
             return result.future;
             // handling exceptions and record the errors;
             // for API exceptions return them in the future,
@@ -1329,13 +1338,16 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                 tp = ProducerInterceptors.extractTopicPartition(record);
             }
 
+            // 根据回调方法 callback、拦截器、topicPartition 创建一个新的拦截回调；进而触发 onCompletion 方法
             Callback interceptCallback = new InterceptorCallback<>(callback, this.interceptors, tp);
 
             // The onCompletion callback does expect a non-null metadata, but one will be created inside
             // the interceptor's onCompletion implementation before the user's callback is invoked.
-            // onCompletion 回调期望一个非空的元数据，但在调用用户回调之前，会在拦截器的 onCompletion 实现中创建一个元数据。
+            // 这里传了一个 null 作为 RecordMetadata，在 onCompletion 方法中会创建一个新的 RecordMetadata
+            // 内部会触发拦截器的 onCompletion 方法和回调方法的 onCompletion 方法
             interceptCallback.onCompletion(null, e);
             this.errors.record();
+            // 触发 interceptors 的 onSendError 方法
             this.interceptors.onSendError(record, tp, e);
             return new FutureFailure(e);
         } catch (InterruptedException e) {
@@ -1384,16 +1396,18 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
     private ClusterAndWaitTime waitOnMetadata(String topic, Integer partition, long nowMs, long maxWaitMs) throws InterruptedException {
         // add topic to metadata topic list if it is not there already and reset expiry
         // 如果主题不在元数据主题列表中，则添加主题并重置过期时间
+
+        // 获取到当前的集群元数据
         Cluster cluster = metadata.fetch();
 
-        // 检查主题是否无效，如果无效则抛出 InvalidTopicException
+        // 检查 topic 是否有效，如果无效则抛出 InvalidTopicException
         if (cluster.invalidTopics().contains(topic))
             throw new InvalidTopicException(topic);
 
-        // 将主题添加到元数据中，并更新当前时间
+        // 将 topic 添加到元数据中，并更新当前时间
         metadata.add(topic, nowMs);
 
-        // 获取主题的分区数
+        // 获取 topic 的分区数
         Integer partitionsCount = cluster.partitionCountForTopic(topic);
         // Return cached metadata if we have it, and if the record's partition is either undefined
         // or within the known partition range
@@ -1401,6 +1415,8 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         if (partitionsCount != null && (partition == null || partition < partitionsCount))
             return new ClusterAndWaitTime(cluster, 0);
 
+        // 走到下面的逻辑的时候，说明：partitionsCount == null 或者指定的 partition 大于等于 partitionsCount
+        // 进而说明需要和 broker 通信获取最新的元数据
         long remainingWaitMs = maxWaitMs;
         long elapsed = 0;
         // Issue metadata requests until we have metadata for the topic and the requested partition,
@@ -1414,9 +1430,11 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             } else {
                 log.trace("Requesting metadata update for topic {}.", topic);
             }
+            // 再更新一次元数据
             metadata.add(topic, nowMs + elapsed);
             int version = metadata.requestUpdateForTopic(topic);
             sender.wakeup();
+            // 等待元数据更新，看起来更新是在 sender 中操作的
             try {
                 metadata.awaitUpdate(version, remainingWaitMs);
             } catch (TimeoutException ex) {
@@ -1426,6 +1444,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                         String.format("Topic %s not present in metadata after %d ms.",
                                 topic, maxWaitMs));
             }
+            // 再次获取集群元数据
             cluster = metadata.fetch();
             elapsed = time.milliseconds() - nowMs;
             if (elapsed >= maxWaitMs) {
@@ -1753,11 +1772,13 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * @return 分区
      */
     private int partition(ProducerRecord<K, V> record, byte[] serializedKey, byte[] serializedValue, Cluster cluster) {
-        // 如果记录有分区，则返回分区值
+        // 从 record 获取指定的分区
         Integer partition = record.partition();
         // 如果分区不为 null，则返回分区值；否则调用分区器类来计算分区
+        // 如果手动指定了分区，那么在 doSend 的时候会保证拉取 metadata 来验证分区是否存在
         return partition != null ?
                 partition :
+                // 调用分区器来计算消息发往的分区
                 partitioner.partition(
                         record.topic(), record.key(), serializedKey, record.value(), serializedValue, cluster);
     }

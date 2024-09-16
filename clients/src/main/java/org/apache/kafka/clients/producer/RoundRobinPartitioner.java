@@ -28,10 +28,12 @@ import org.apache.kafka.common.utils.Utils;
 
 /**
  * The "Round-Robin" partitioner
+ * 轮询分区器
  * 
  * This partitioning strategy can be used when user wants 
  * to distribute the writes to all partitions equally. This
- * is the behaviour regardless of record key hash. 
+ * is the behaviour regardless of record key hash.
+ * 该分区策略可用于用户希望将写入均匀分布到所有分区的情况。这种策略与 key 完全无关。
  *
  */
 public class RoundRobinPartitioner implements Partitioner {
@@ -51,23 +53,29 @@ public class RoundRobinPartitioner implements Partitioner {
      */
     @Override
     public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes, Cluster cluster) {
+        // 获取所有的分区
         List<PartitionInfo> partitions = cluster.partitionsForTopic(topic);
         int numPartitions = partitions.size();
+        // 获取 topic 的下一个自增的值
         int nextValue = nextValue(topic);
+        // 如果有可用的分区，就返回一个可用的分区
         List<PartitionInfo> availablePartitions = cluster.availablePartitionsForTopic(topic);
         if (!availablePartitions.isEmpty()) {
             int part = Utils.toPositive(nextValue) % availablePartitions.size();
             return availablePartitions.get(part).partition();
         } else {
             // no partitions are available, give a non-available partition
+            // 如果没有可用的分区，就返回一个不可用的分区
             return Utils.toPositive(nextValue) % numPartitions;
         }
     }
 
     private int nextValue(String topic) {
+        // 获取下一个值
         AtomicInteger counter = topicCounterMap.computeIfAbsent(topic, k -> {
             return new AtomicInteger(0);
         });
+        // 如果 AtomicInteger 的值超过了 Integer.MAX_VALUE，那么就会变成负数
         return counter.getAndIncrement();
     }
 

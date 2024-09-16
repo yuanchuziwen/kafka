@@ -60,15 +60,18 @@ public class ChangedSerializer<T> implements Serializer<Change<T>>, WrappingNull
                     + " : " + data.newValue + ") in ChangeSerializer, which is not allowed.");
             }
 
+            // 优先使用 newValue 来进行序列化
             serializedKey = inner.serialize(topic, headers, data.newValue);
         } else {
             if (data.oldValue == null) {
                 throw new StreamsException("Both old and new values are null in ChangeSerializer, which is not allowed.");
             }
 
+            // 否则使用 oldValue 来进行序列化
             serializedKey = inner.serialize(topic, headers, data.oldValue);
         }
 
+        // 封装序列化后的字节数组 和 flag
         final ByteBuffer buf = ByteBuffer.allocate(serializedKey.length + NEWFLAG_SIZE);
         buf.put(serializedKey);
         buf.put((byte) (data.newValue != null ? 1 : 0));

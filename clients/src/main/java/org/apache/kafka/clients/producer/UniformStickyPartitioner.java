@@ -27,9 +27,14 @@ import org.apache.kafka.common.Cluster;
  * <ul>
  * <li>If a partition is specified in the record, use it
  * <li>Otherwise choose the sticky partition that changes when the batch is full.
+ *
+ * 分区策略：
+ * - 如果记录中指定了分区，则使用它
+ * - 否则选择在批次满时更改的粘性分区。
  * 
  * NOTE: In constrast to the DefaultPartitioner, the record key is NOT used as part of the partitioning strategy in this 
  *       partitioner. Records with the same key are not guaranteed to be sent to the same partition.
+ * 注意：与 DefaultPartitioner 不同，此分区器中不使用记录键作为分区策略的一部分。不能保证具有相同键的记录将发送到同一分区。
  * 
  * See KIP-480 for details about sticky partitioning.
  */
@@ -50,6 +55,7 @@ public class UniformStickyPartitioner implements Partitioner {
      * @param cluster The current cluster metadata
      */
     public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes, Cluster cluster) {
+        // 完全依赖于 StickyPartitionCache
         return stickyPartitionCache.partition(topic, cluster);
     }
 
