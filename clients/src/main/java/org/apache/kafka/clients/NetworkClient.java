@@ -458,7 +458,9 @@ public class NetworkClient implements KafkaClient {
     }
 
     private void doSend(ClientRequest clientRequest, boolean isInternalRequest, long now) {
+        // 确保客户端处于活动状态
         ensureActive();
+        // 获取目标节点 ID
         String nodeId = clientRequest.destination();
         if (!isInternalRequest) {
             // If this request came from outside the NetworkClient, validate
@@ -467,6 +469,9 @@ public class NetworkClient implements KafkaClient {
             // will be slightly different for some internal requests (for
             // example, ApiVersionsRequests can be sent prior to being in
             // READY state.)
+            // 如果请求来自 NetworkClient 外部，请验证我们是否可以发送数据。
+            // 如果请求是内部的，我们相信内部代码已经进行了此验证。
+            // 对于某些内部请求，验证将略有不同（例如，ApiVersionsRequests 可以在 READY 状态之前发送）。
             if (!canSendRequest(nodeId, now))
                 throw new IllegalStateException("Attempt to send a request to node " + nodeId + " which is not ready.");
         }
@@ -492,6 +497,8 @@ public class NetworkClient implements KafkaClient {
         } catch (UnsupportedVersionException unsupportedVersionException) {
             // If the version is not supported, skip sending the request over the wire.
             // Instead, simply add it to the local queue of aborted requests.
+            // 如果不支持版本，则跳过通过网络发送请求。
+            // 相反，只需将其添加到已中止请求的本地队列中。
             log.debug("Version mismatch when attempting to send {} with correlation id {} to {}", builder,
                     clientRequest.correlationId(), clientRequest.destination(), unsupportedVersionException);
             ClientResponse clientResponse = new ClientResponse(clientRequest.makeHeader(builder.latestAllowedVersion()),
@@ -513,6 +520,7 @@ public class NetworkClient implements KafkaClient {
                 clientRequest.apiKey(), header, clientRequest.requestTimeoutMs(), destination, request);
         }
         Send send = request.toSend(header);
+        // 封装为 `InFlightRequest` 对象
         InFlightRequest inFlightRequest = new InFlightRequest(
                 clientRequest,
                 header,
