@@ -1686,6 +1686,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                     this.sender.initiateClose();
                 if (this.ioThread != null) {
                     try {
+                        // 当前线程等待 ioThread 结束
                         this.ioThread.join(timeoutMs);
                     } catch (InterruptedException t) {
                         // 记录第一个遇到的异常
@@ -1700,6 +1701,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         if (this.sender != null && this.ioThread != null && this.ioThread.isAlive()) {
             log.info("Proceeding to force close the producer since pending requests could not be completed " +
                     "within timeout {} ms.", timeoutMs);
+            // 强制关闭生产者
             this.sender.forceClose();
             // 仅在不从回调中调用时加入发送者线程
             if (!invokedFromCallback) {
@@ -1711,13 +1713,13 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             }
         }
 
-        // 安静地关闭各种资源
+        // 安静地关闭各种资源，这些资源基本上都实现了 Closable 接口或者 AutoCloseable 接口
         Utils.closeQuietly(interceptors, "producer interceptors", firstException);
         Utils.closeQuietly(metrics, "producer metrics", firstException);
         Utils.closeQuietly(keySerializer, "producer keySerializer", firstException);
         Utils.closeQuietly(valueSerializer, "producer valueSerializer", firstException);
         Utils.closeQuietly(partitioner, "producer partitioner", firstException);
-        // 取消注册 JMX 信息
+        // 注销 JMX 信息
         AppInfoParser.unregisterAppInfo(JMX_PREFIX, clientId, metrics);
         // 获取第一个遇到的异常
         Throwable exception = firstException.get();

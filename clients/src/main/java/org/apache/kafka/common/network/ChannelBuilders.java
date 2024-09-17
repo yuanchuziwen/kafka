@@ -72,6 +72,7 @@ public class ChannelBuilders {
             boolean saslHandshakeRequestEnable,
             LogContext logContext) {
 
+        // 如果安全协议是 SASL_PLAINTEXT 或者 SASL_SSL，那么需要校验 contextType、clientSaslMechanism 不能为空
         if (securityProtocol == SecurityProtocol.SASL_PLAINTEXT || securityProtocol == SecurityProtocol.SASL_SSL) {
             if (contextType == null)
                 throw new IllegalArgumentException("`contextType` must be non-null if `securityProtocol` is `" + securityProtocol + "`");

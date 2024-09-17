@@ -535,34 +535,54 @@ public class NetworkClient implements KafkaClient {
      */
     @Override
     public List<ClientResponse> poll(long timeout, long now) {
+        // 确保客户端处于活动状态
         ensureActive();
 
+        // 处理已中止的发送请求
+        // 检查 `abortedSends` 列表是否为空，如果不为空，则立即处理这些请求并返回响应。
         if (!abortedSends.isEmpty()) {
             // If there are aborted sends because of unsupported version exceptions or disconnects,
             // handle them immediately without waiting for Selector#poll.
+            // 如果有因为不支持的版本异常或断开而中止的发送请求，则立即处理它们，而不需要等待 Selector#poll。
             List<ClientResponse> responses = new ArrayList<>();
+            // 将 `abortedSends` 添加到 `responses` 列表中，并清空 `abortedSends` 列表。
             handleAbortedSends(responses);
+            // 触发 `ClientResponse` 的 `onComplete` 方法
             completeResponses(responses);
+            // 注意：这里会直接返回
             return responses;
         }
 
+        // 更新元数据
+        // 调用 `metadataUpdater.maybeUpdate(now)` 方法获取元数据更新的超时时间
         long metadataTimeout = metadataUpdater.maybeUpdate(now);
         try {
+            // 执行网络 I/O 操作
+            // 调用 `selector.poll()` 方法进行实际的读写操作，等待响应
             this.selector.poll(Utils.min(timeout, metadataTimeout, defaultRequestTimeoutMs));
         } catch (IOException e) {
             log.error("Unexpected error during I/O", e);
         }
 
         // process completed actions
+        // 处理完成的操作
         long updatedNow = this.time.milliseconds();
         List<ClientResponse> responses = new ArrayList<>();
+        // 处理已完成的发送请求
         handleCompletedSends(responses, updatedNow);
+        // 处理已完成的接收请求
         handleCompletedReceives(responses, updatedNow);
+        // 处理断开的连接
         handleDisconnections(responses, updatedNow);
+        // 处理新的连接
         handleConnections();
+        // 处理 API 版本请求的初始化
         handleInitiateApiVersionRequests(updatedNow);
+        // 处理超时的连接
         handleTimedOutConnections(responses, updatedNow);
+        // 处理超时的请求
         handleTimedOutRequests(responses, updatedNow);
+        // 触发 `ClientResponse` 的 `onComplete` 方法
         completeResponses(responses);
 
         return responses;

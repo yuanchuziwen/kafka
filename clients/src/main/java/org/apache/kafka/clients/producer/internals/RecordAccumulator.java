@@ -719,6 +719,9 @@ public final class RecordAccumulator {
         List<PartitionInfo> parts = cluster.partitionsForNode(node.id());
         // 用于存储已准备好发送的批次
         List<ProducerBatch> ready = new ArrayList<>();
+        // 下面的这个 do-while 循环，会遍历所有分区，将可以发送的批次添加到 ready 列表中
+        // drainIndex 的设计能保证每次循环都从上次遍历的位置开始，直到遍历完所有分区；
+
         // 计算起始索引
         int start = drainIndex = drainIndex % parts.size();
         do {
@@ -730,7 +733,8 @@ public final class RecordAccumulator {
             this.drainIndex = (this.drainIndex + 1) % parts.size();
 
             // Only proceed if the partition has no in-flight batches.
-            // 如果分区有未完成的批次，跳过
+            // 如果分区有 in-flight 的批次，跳过
+            // 这里是为了站在 producer 角度保证消息的顺序性，如果有 in-flight 的批次，那么就不会再往这个分区发送消息
             if (isMuted(tp))
                 continue;
 
@@ -756,7 +760,7 @@ public final class RecordAccumulator {
                 if (backoff)
                     continue;
 
-                // 如果当前批次大小加上第一个批次的大小大于最大大小，并且已准备好发送的批次不为空，跳过
+                // 如果在增加了这个批次之后，大小超过了 maxSize && 此时 ready 中已经有的准备发送的批次，那么就跳出循环
                 if (size + first.estimatedSizeInBytes() > maxSize && !ready.isEmpty()) {
                     // there is a rare case that a single batch size is larger than the request size due to
                     // compression; in this case we will still eventually send this batch in a single request
@@ -773,7 +777,7 @@ public final class RecordAccumulator {
                     // 获取生产者 ID 和 epoch
                     ProducerIdAndEpoch producerIdAndEpoch =
                             transactionManager != null ? transactionManager.producerIdAndEpoch() : null;
-                    // 获取第一个批次
+                    // 获取第一个批次，这里会从 deque 中移除
                     ProducerBatch batch = deque.pollFirst();
                     // 如果生产者 ID 和 epoch 不为空，并且批次没有序列号，跳过
                     if (producerIdAndEpoch != null && !batch.hasSequence()) {
@@ -819,6 +823,8 @@ public final class RecordAccumulator {
                     batch.drained(now);
                 }
             }
+
+            // while 循环结束的条件是 drainIndex 回到了起始位置，说明遍历完所有分区
         } while (start != drainIndex);
         // 返回已准备好发送的批次列表
         return ready;
@@ -936,7 +942,6 @@ public final class RecordAccumulator {
 
     /**
      * Initiate the flushing of data from the accumulator...this makes all requests immediately ready
-     * 开始刷新数据从 accumulator 中，这将使所有请求立即准备好
      */
     public void beginFlush() {
         this.flushesInProgress.getAndIncrement();
