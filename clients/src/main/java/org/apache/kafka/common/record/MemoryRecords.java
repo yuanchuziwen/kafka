@@ -45,18 +45,25 @@ import java.util.Objects;
  * A {@link Records} implementation backed by a ByteBuffer. This is used only for reading or
  * modifying in-place an existing buffer of record batches. To create a new buffer see {@link MemoryRecordsBuilder},
  * or one of the {@link #builder(ByteBuffer, byte, CompressionType, TimestampType, long)} variants.
+ * 一个 {@link Records} 的实现，由一个 ByteBuffer 支持。这个类只用于读取或修改现有的记录批次缓冲区。
+ * 要创建一个新的缓冲区，请参见 {@link MemoryRecordsBuilder}，或 {@link #builder(ByteBuffer, byte, CompressionType, TimestampType, long)} 的变体之一。
  */
 public class MemoryRecords extends AbstractRecords {
     private static final Logger log = LoggerFactory.getLogger(MemoryRecords.class);
+    // 一个空的 MemoryRecords 实例
     public static final MemoryRecords EMPTY = MemoryRecords.readableRecords(ByteBuffer.allocate(0));
 
+    // 一个 ByteBuffer 实例，用于存储记录批次
+    // 一般是从 BufferPool 中获取的
     private final ByteBuffer buffer;
 
+    // 一个 Iterable<MutableRecordBatch> 实例，用于遍历记录批次
     private final Iterable<MutableRecordBatch> batches = this::batchIterator;
 
+    // 一个 int 实例，用于存储有效的字节数
     private int validBytes = -1;
 
-    // Construct a writable memory records
+    // 构造一个可写的 memory records
     private MemoryRecords(ByteBuffer buffer) {
         Objects.requireNonNull(buffer, "buffer should not be null");
         this.buffer = buffer;
@@ -69,27 +76,37 @@ public class MemoryRecords extends AbstractRecords {
 
     @Override
     public long writeTo(TransferableChannel channel, long position, int length) throws IOException {
+        // 如果 position 大于 Integer.MAX_VALUE，则抛出异常
         if (position > Integer.MAX_VALUE)
             throw new IllegalArgumentException("position should not be greater than Integer.MAX_VALUE: " + position);
+        // 如果 position + length 大于 buffer 的限制，则抛出异常
         if (position + length > buffer.limit())
             throw new IllegalArgumentException("position+length should not be greater than buffer.limit(), position: "
                     + position + ", length: " + length + ", buffer.limit(): " + buffer.limit());
 
+        // 尝试将 buffer 中的数据写入 channel
         return Utils.tryWriteTo(channel, (int) position, length, buffer);
     }
 
     /**
      * Write all records to the given channel (including partial records).
+     * 将 byte buffer 中的所有记录写入给定的 channel（包括部分记录）。
+     * 
      * @param channel The channel to write to
      * @return The number of bytes written
      * @throws IOException For any IO errors writing to the channel
      */
     public int writeFullyTo(GatheringByteChannel channel) throws IOException {
+        // 标记 buffer 的当前位置
         buffer.mark();
+        // 初始化已写入的字节数
         int written = 0;
+        // 循环写入数据，直到写入的字节数等于 buffer 的大小
         while (written < sizeInBytes())
             written += channel.write(buffer);
+        // 重置 buffer 的位置
         buffer.reset();
+        // 返回已写入的字节数
         return written;
     }
 
@@ -99,41 +116,52 @@ public class MemoryRecords extends AbstractRecords {
      * @return The number of valid bytes
      */
     public int validBytes() {
+        // 如果 validBytes 已经计算过，则直接返回
         if (validBytes >= 0)
             return validBytes;
 
         int bytes = 0;
+        // 遍历所有记录批次，累加每个批次的大小
         for (RecordBatch batch : batches())
             bytes += batch.sizeInBytes();
 
+        // 将计算出的有效字节数存储在 validBytes 中
         this.validBytes = bytes;
+        // 返回有效字节数
         return bytes;
     }
 
     @Override
     public ConvertedRecords<MemoryRecords> downConvert(byte toMagic, long firstOffset, Time time) {
+        // 使用 RecordsUtil 类中的 downConvert 方法将记录批次转换为指定魔数（magic value）的格式
         return RecordsUtil.downConvert(batches(), toMagic, firstOffset, time);
     }
 
     @Override
     public AbstractIterator<MutableRecordBatch> batchIterator() {
+        // 创建一个新的 RecordBatchIterator 实例，用于遍历记录批次
         return new RecordBatchIterator<>(new ByteBufferLogInputStream(buffer.duplicate(), Integer.MAX_VALUE));
     }
 
     /**
      * Validates the header of the first batch and returns batch size.
+     * 验证第一个记录批次的头部并返回批次大小。
+     * 
      * @return first batch size including LOG_OVERHEAD if buffer contains header up to
      *         magic byte, null otherwise
      * @throws CorruptRecordException if record size or magic is invalid
      */
     public Integer firstBatchSize() {
+        // 如果 buffer 中剩余的字节数小于 HEADER_SIZE_UP_TO_MAGIC，则返回 null
         if (buffer.remaining() < HEADER_SIZE_UP_TO_MAGIC)
             return null;
+        // 使用 ByteBufferLogInputStream 类中的 nextBatchSize 方法获取第一个记录批次的大小
         return new ByteBufferLogInputStream(buffer, Integer.MAX_VALUE).nextBatchSize();
     }
 
     /**
      * Filter the records into the provided ByteBuffer.
+     * 将记录过滤到提供的 ByteBuffer 中。
      *
      * @param partition                   The partition that is filtered (used only for logging)
      * @param filter                      The filter function
@@ -150,6 +178,7 @@ public class MemoryRecords extends AbstractRecords {
      */
     public FilterResult filterTo(TopicPartition partition, RecordFilter filter, ByteBuffer destinationBuffer,
                                  int maxRecordBatchSize, BufferSupplier decompressionBufferSupplier) {
+        // 调用 filterTo 方法，传入当前的批次、过滤器、目标缓冲区、最大批次大小和解压缩缓冲区供应商
         return filterTo(partition, batches(), filter, destinationBuffer, maxRecordBatchSize, decompressionBufferSupplier);
     }
 

@@ -334,6 +334,7 @@ public class Sender implements Runnable {
         // okay we stopped accepting requests but there may still be
         // requests in the transaction manager, accumulator or waiting for acknowledgment,
         // wait until these are completed.
+        // 好的，我们停止接受请求，但事务管理器、累加器中可能仍有请求，或者等待确认，等待这些请求完成。
         while (!forceClose && ((this.accumulator.hasUndrained() || this.client.inFlightRequestCount() > 0) || hasPendingTransactionalRequests())) {
             try {
                 runOnce();
@@ -343,6 +344,7 @@ public class Sender implements Runnable {
         }
 
         // Abort the transaction if any commit or abort didn't go through the transaction manager's queue
+        // 如果任何提交或中止未通过事务管理器的队列，则中止事务
         while (!forceClose && transactionManager != null && transactionManager.hasOngoingTransaction()) {
             if (!transactionManager.isCompleting()) {
                 log.info("Aborting incomplete transaction due to shutdown");
@@ -358,6 +360,7 @@ public class Sender implements Runnable {
         if (forceClose) {
             // We need to fail all the incomplete transactional requests and batches and wake up the threads waiting on
             // the futures.
+            // 我们需要失败所有未完成的事务请求和批次，并唤醒等待 futures 的线程。
             if (transactionManager != null) {
                 log.debug("Aborting incomplete transactional requests due to forced shutdown");
                 transactionManager.close();
@@ -365,6 +368,7 @@ public class Sender implements Runnable {
             log.debug("Aborting incomplete batches due to forced shutdown");
             this.accumulator.abortIncompleteBatches();
         }
+        // 关闭网络客户端
         try {
             this.client.close();
         } catch (Exception e) {

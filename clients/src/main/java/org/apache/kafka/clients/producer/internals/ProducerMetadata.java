@@ -32,12 +32,18 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
+/**
+ * 生产者元数据类，继承自 Metadata 类
+ */
 public class ProducerMetadata extends Metadata {
     // If a topic hasn't been accessed for this many milliseconds, it is removed from the cache.
+    // 如果一个主题在指定时间内没有被访问，则从缓存中删除
     private final long metadataIdleMs;
 
     /* Topics with expiry time */
+    // 记录每个主题的过期时间
     private final Map<String, Long> topics = new HashMap<>();
+    // 新主题集合
     private final Set<String> newTopics = new HashSet<>();
     private final Logger log;
     private final Time time;
@@ -66,7 +72,9 @@ public class ProducerMetadata extends Metadata {
 
     public synchronized void add(String topic, long nowMs) {
         Objects.requireNonNull(topic, "topic cannot be null");
+        // 如果 put 的返回值是 null，说明之前没有这个 topic，需要更新 metadata
         if (topics.put(topic, nowMs + metadataIdleMs) == null) {
+            // 记录这个新的 topic，并请求更新 metadata
             newTopics.add(topic);
             requestUpdateForNewTopics();
         }

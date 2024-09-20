@@ -37,10 +37,14 @@ import static org.apache.kafka.common.utils.Utils.wrapNullable;
  * This class is used to write new log data in memory, i.e. this is the write path for {@link MemoryRecords}.
  * It transparently handles compression and exposes methods for appending new records, possibly with message
  * format conversion.
+ * 这个类用于在内存中写入新的日志数据，即这是{@link MemoryRecords}的写入路径。
+ * 它透明地处理压缩，并公开了用于追加新记录的方法，可能会进行消息格式转换。
  *
  * In cases where keeping memory retention low is important and there's a gap between the time that record appends stop
  * and the builder is closed (e.g. the Producer), it's important to call `closeForRecordAppends` when the former happens.
  * This will release resources like compression buffers that can be relatively large (64 KB for LZ4).
+ * 在重要的情况下保持内存保留量较低，并且在记录追加停止和构建器关闭之间存在间隙时（例如，生产者），
+ * 当前者发生时调用`closeForRecordAppends`很重要。这将释放诸如压缩缓冲区之类的资源，这些资源可能相对较大（LZ4为64 KB）。
  */
 public class MemoryRecordsBuilder implements AutoCloseable {
     private static final float COMPRESSION_RATE_ESTIMATION_FACTOR = 1.05f;
@@ -604,7 +608,7 @@ public class MemoryRecordsBuilder implements AutoCloseable {
         try {
             int size = record.sizeInBytes();
             AbstractLegacyRecordBatch.writeHeader(appendStream, toInnerOffset(offset), size);
-
+            // 将
             ByteBuffer buffer = record.buffer().duplicate();
             appendStream.write(buffer.array(), buffer.arrayOffset(), buffer.limit());
 

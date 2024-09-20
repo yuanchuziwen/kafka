@@ -586,7 +586,7 @@ public final class RecordAccumulator {
         // 存储未知领导者的主题
         Set<String> unknownLeaderTopics = new HashSet<>();
 
-        // 检查是否有空闲内存
+        // 检查是否有线程正在阻塞等待 BufferPool 释放空间
         boolean exhausted = this.free.queued() > 0;
         
         // 遍历所有主题分区的批次

@@ -654,6 +654,7 @@ public class ProducerConfig extends AbstractConfig {
     public ProducerConfig(Map<String, Object> props) {
         // 会调用父类 AbstractConfig 的构造方法
         // CONFIG 是 producer 端的一个静态的配置限制信息
+        // 这个 props 其实就是 originals
         super(CONFIG, props);
     }
 

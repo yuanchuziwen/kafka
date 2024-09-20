@@ -59,26 +59,43 @@ import static org.apache.kafka.common.record.RecordBatch.NO_TIMESTAMP;
  */
 public final class ProducerBatch {
 
+    // 日志记录器
     private static final Logger log = LoggerFactory.getLogger(ProducerBatch.class);
 
+    // 枚举类型，表示最终状态
     private enum FinalState { ABORTED, FAILED, SUCCEEDED }
 
+    // 创建时间戳
     final long createdMs;
+    // 主题分区
     final TopicPartition topicPartition;
+    // 生产请求结果
     final ProduceRequestResult produceFuture;
 
+    // 回调函数列表
     private final List<Thunk> thunks = new ArrayList<>();
+    // 内存记录构建器
     private final MemoryRecordsBuilder recordsBuilder;
+    // 尝试次数
     private final AtomicInteger attempts = new AtomicInteger(0);
+    // 是否为拆分批次
     private final boolean isSplitBatch;
+    // 最终状态
     private final AtomicReference<FinalState> finalState = new AtomicReference<>(null);
 
+    // 记录数量
     int recordCount;
+    // 最大记录大小
     int maxRecordSize;
+    // 上次尝试时间戳
     private long lastAttemptMs;
+    // 上次追加时间
     private long lastAppendTime;
+    // 排空时间戳
     private long drainedMs;
+    // 是否重试
     private boolean retry;
+    // 是否重新打开
     private boolean reopened;
 
     public ProducerBatch(TopicPartition tp, MemoryRecordsBuilder recordsBuilder, long createdMs) {

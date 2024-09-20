@@ -48,36 +48,62 @@ import static org.apache.kafka.common.record.RecordBatch.NO_PARTITION_LEADER_EPO
 
 /**
  * A class encapsulating some of the logic around metadata.
+ * 一个封装元数据逻辑的类
  * <p>
  * This class is shared by the client thread (for partitioning) and the background sender thread.
+ * 这个类由客户端线程（用于分区）和后台发送线程共享。
  *
  * Metadata is maintained for only a subset of topics, which can be added to over time. When we request metadata for a
- * topic we don't have any metadata for it will trigger a metadata update.
+ * topic we don't have any meta data for it will trigger a metadata update.
  * <p>
+ * 元数据只会维护一部分主题的元数据，这些主题可以随着时间的推移添加。
+ * 当我们请求元数据时，如果没有元数据，将触发元数据更新。
+ *
  * If topic expiry is enabled for the metadata, any topic that has not been used within the expiry interval
  * is removed from the metadata refresh set after an update. Consumers disable topic expiry since they explicitly
  * manage topics while producers rely on topic expiry to limit the refresh set.
+ * <p>
+ * 如果主题过期功能启用，任何在过期间隔内未使用的主题都会在更新后从元数据刷新集中删除。
+ * 消费者禁用主题过期，因为他们显式管理主题，而生产者依赖于主题过期来限制刷新集。
  */
 public class Metadata implements Closeable {
+    // 日志记录器
     private final Logger log;
+    // 元数据刷新最小间隔时间
     private final long refreshBackoffMs;
+    // 元数据过期时间
     private final long metadataExpireMs;
-    private int updateVersion;  // bumped on every metadata response
-    private int requestVersion; // bumped on every new topic addition
-    private long lastRefreshMs;
-    private long lastSuccessfulRefreshMs;
-    private KafkaException fatalException;
-    private Set<String> invalidTopics;
-    private Set<String> unauthorizedTopics;
-    private MetadataCache cache = MetadataCache.empty();
-    private boolean needFullUpdate;
-    private boolean needPartialUpdate;
+    // 集群资源监听器
     private final ClusterResourceListeners clusterResourceListeners;
-    private boolean isClosed;
+    // 上次看到的 leader epoch
     private final Map<TopicPartition, Integer> lastSeenLeaderEpochs;
+    // 每次元数据响应时增加的版本号
+    private int updateVersion;
+    // 每次添加新主题时增加的版本号
+    private int requestVersion;
+    // 上次刷新时间
+    private long lastRefreshMs;
+    // 上次成功刷新时间
+    private long lastSuccessfulRefreshMs;
+    // 致命异常
+    private KafkaException fatalException;
+    // 无效主题集合
+    private Set<String> invalidTopics;
+    // 未授权主题集合
+    private Set<String> unauthorizedTopics;
+    // 元数据缓存
+    private MetadataCache cache = MetadataCache.empty();
+    // 是否需要完全更新
+    private boolean needFullUpdate;
+    // 是否需要部分更新
+    private boolean needPartialUpdate;
+    // 是否已关闭
+    private boolean isClosed;
 
     /**
      * Create a new Metadata instance
+     * <p>
+     * 创建一个新的 Metadata 实例
      *
      * @param refreshBackoffMs         The minimum amount of time that must expire between metadata refreshes to avoid busy
      *                                 polling
@@ -98,6 +124,8 @@ public class Metadata implements Closeable {
         this.updateVersion = 0;
         this.needFullUpdate = false;
         this.needPartialUpdate = false;
+        // metadata 会持有 ClusterResourceListeners 的引用
+        // 当 cluster 信息变更时，会调用 ClusterResourceListeners 的相关方法
         this.clusterResourceListeners = clusterResourceListeners;
         this.isClosed = false;
         this.lastSeenLeaderEpochs = new HashMap<>();
@@ -107,6 +135,10 @@ public class Metadata implements Closeable {
 
     /**
      * Get the current cluster info without blocking
+     * <p>
+     * 获取当前的集群信息，不阻塞
+     *
+     * @return 当前的集群信息
      */
     public synchronized Cluster fetch() {
         return cache.cluster();
@@ -114,11 +146,14 @@ public class Metadata implements Closeable {
 
     /**
      * Return the next time when the current cluster info can be updated (i.e., backoff time has elapsed).
+     * <p>
+     * 返回当前集群信息可以更新的下一个时间（即，回退时间已过去）。
      *
      * @param nowMs current time in ms
      * @return remaining time in ms till the cluster info can be updated again
      */
     public synchronized long timeToAllowUpdate(long nowMs) {
+        // 返回上次刷新时间加上刷新间隔时间减去当前时间，如果小于0，返回0
         return Math.max(this.lastRefreshMs + this.refreshBackoffMs - nowMs, 0);
     }
 
@@ -126,12 +161,18 @@ public class Metadata implements Closeable {
      * The next time to update the cluster info is the maximum of the time the current info will expire and the time the
      * current info can be updated (i.e. backoff time has elapsed); If an update has been request then the expiry time
      * is now
+     * <p>
+     * 下一个更新集群信息的时间是当前信息过期时间和当前信息可以更新的时间（即，回退时间已过去）的最大值；
+     * 如果更新请求，过期时间现在是 
      *
      * @param nowMs current time in ms
      * @return remaining time in ms till updating the cluster info
      */
     public synchronized long timeToNextUpdate(long nowMs) {
-        long timeToExpire = updateRequested() ? 0 : Math.max(this.lastSuccessfulRefreshMs + this.metadataExpireMs - nowMs, 0);
+        // 确定当前数据的过期时间，如果已经请求了更新，返回 0
+        long timeToExpire = updateRequested()
+                ? 0
+                : Math.max(this.lastSuccessfulRefreshMs + this.metadataExpireMs - nowMs, 0);
         return Math.max(timeToExpire, timeToAllowUpdate(nowMs));
     }
 
@@ -141,16 +182,33 @@ public class Metadata implements Closeable {
 
     /**
      * Request an update of the current cluster metadata info, return the current updateVersion before the update
+     * <p>
+     * 请求更新当前的集群元数据信息，返回当前的更新版本
+     *
+     * @return 当前的更新版本
      */
     public synchronized int requestUpdate() {
+        // 设置需要完全更新
         this.needFullUpdate = true;
+        // 返回当前的更新版本
         return this.updateVersion;
     }
 
+    /**
+     * Request an update of the current cluster metadata info for new topics, return the current updateVersion before the
+     * update
+     * <p>
+     * 请求更新当前集群元数据信息的新主题，返回更新之前的当前更新版本
+     *
+     * @return 当前的更新版本
+     */
     public synchronized int requestUpdateForNewTopics() {
         // Override the timestamp of last refresh to let immediate update.
+        // 设置上次刷新时间为0，表示立即更新    
         this.lastRefreshMs = 0;
+        // 设置需要部分更新
         this.needPartialUpdate = true;
+        // 增加请求版本
         this.requestVersion++;
         return this.updateVersion;
     }
@@ -159,32 +217,43 @@ public class Metadata implements Closeable {
      * Request an update for the partition metadata iff we have seen a newer leader epoch. This is called by the client
      * any time it handles a response from the broker that includes leader epoch, except for UpdateMetadata which
      * follows a different code path ({@link #update}).
+     * <p>
+     * 请求更新分区元数据，如果看到一个更新的 leader epoch。
+     * 这个方法在客户端处理来自 broker 的响应时调用，除了 UpdateMetadata 会走不同的代码路径。
      *
      * @param topicPartition
      * @param leaderEpoch
      * @return true if we updated the last seen epoch, false otherwise
      */
     public synchronized boolean updateLastSeenEpochIfNewer(TopicPartition topicPartition, int leaderEpoch) {
+        // 验证数据正确
         Objects.requireNonNull(topicPartition, "TopicPartition cannot be null");
         if (leaderEpoch < 0)
             throw new IllegalArgumentException("Invalid leader epoch " + leaderEpoch + " (must be non-negative)");
 
+        // 获取当前的 leader epoch
         Integer oldEpoch = lastSeenLeaderEpochs.get(topicPartition);
         log.trace("Determining if we should replace existing epoch {} with new epoch {} for partition {}", oldEpoch, leaderEpoch, topicPartition);
 
         final boolean updated;
+        // 如果旧的 leader epoch 为 null，则不更新
         if (oldEpoch == null) {
             log.debug("Not replacing null epoch with new epoch {} for partition {}", leaderEpoch, topicPartition);
             updated = false;
+
+            // 否则，如果新的 leader epoch 大于旧的 leader epoch，更新 lastSeenLeaderEpochs
         } else if (leaderEpoch > oldEpoch) {
             log.debug("Updating last seen epoch from {} to {} for partition {}", oldEpoch, leaderEpoch, topicPartition);
             lastSeenLeaderEpochs.put(topicPartition, leaderEpoch);
             updated = true;
+
+            // 否则，说明新的 leader epoch 小于旧的 leader epoch，不更新
         } else {
             log.debug("Not replacing existing epoch {} with new epoch {} for partition {}", oldEpoch, leaderEpoch, topicPartition);
             updated = false;
         }
 
+        // 设置需要完全更新
         this.needFullUpdate = this.needFullUpdate || updated;
         return updated;
     }
@@ -195,6 +264,8 @@ public class Metadata implements Closeable {
 
     /**
      * Check whether an update has been explicitly requested.
+     * <p>
+     *     检查是否已经明确请求了更新。
      *
      * @return true if an update was requested, false otherwise
      */

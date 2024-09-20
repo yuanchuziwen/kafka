@@ -557,6 +557,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             if (metadata != null) {
                 this.metadata = metadata;
             } else {
+                // 一般都会新建一个 ProducerMetadata 实例
                 this.metadata = new ProducerMetadata(retryBackoffMs,
                         config.getLong(ProducerConfig.METADATA_MAX_AGE_CONFIG),
                         config.getLong(ProducerConfig.METADATA_MAX_IDLE_CONFIG),
@@ -609,7 +610,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         // 创建限流时间传感器
         Sensor throttleTimeSensor = Sender.throttleTimeSensor(metricsRegistry.senderMetrics);
         
-        // 创建或使用现有的KafkaClient
+        // 创建或使用现有的 KafkaClient
         KafkaClient client = kafkaClient != null ? kafkaClient : new NetworkClient(
                 new Selector(producerConfig.getLong(ProducerConfig.CONNECTIONS_MAX_IDLE_MS_CONFIG),
                         this.metrics, time, "producer", channelBuilder, logContext),
@@ -629,10 +630,10 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                 throttleTimeSensor,
                 logContext);
 
-        // 获取acks配置
+        // 获取 acks 配置
         short acks = Short.parseShort(producerConfig.getString(ProducerConfig.ACKS_CONFIG));
         
-        // 创建并返回Sender实例
+        // 创建并返回 Sender 实例
         return new Sender(logContext,
                 client,
                 metadata,
@@ -708,7 +709,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
 
         // 检查是否启用了幂等性配置
         if (config.getBoolean(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG)) {
-            // 获取事务ID
+            // 获取事务 ID
             final String transactionalId = config.getString(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
             // 获取事务超时时间
             final int transactionTimeoutMs = config.getInt(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG);
@@ -1287,7 +1288,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             if (transactionManager != null && transactionManager.isTransactional()) {
                 transactionManager.failIfNotReadyForSend();
             }
-            // 将记录附加到累加器（注意：abortOnNewBatch=true）
+            // 将记录附加到累加器（注意：abortOnNewBatch = true）
             RecordAccumulator.RecordAppendResult result = accumulator.append(tp, timestamp, serializedKey,
                     serializedValue, headers, interceptCallback, remainingWaitMs, true, nowMs);
 
