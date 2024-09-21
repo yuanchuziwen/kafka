@@ -16,23 +16,8 @@
  */
 package org.apache.kafka.clients.producer.internals;
 
-import java.nio.ByteBuffer;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Deque;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicInteger;
-
 import org.apache.kafka.clients.ApiVersions;
 import org.apache.kafka.clients.producer.Callback;
-import org.apache.kafka.common.utils.ProducerIdAndEpoch;
 import org.apache.kafka.common.Cluster;
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.MetricName;
@@ -54,8 +39,23 @@ import org.apache.kafka.common.record.RecordBatch;
 import org.apache.kafka.common.record.TimestampType;
 import org.apache.kafka.common.utils.CopyOnWriteMap;
 import org.apache.kafka.common.utils.LogContext;
+import org.apache.kafka.common.utils.ProducerIdAndEpoch;
 import org.apache.kafka.common.utils.Time;
 import org.slf4j.Logger;
+
+import java.nio.ByteBuffer;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * This class acts as a queue that accumulates records into {@link MemoryRecords}
@@ -73,9 +73,11 @@ public final class RecordAccumulator {
     private final Logger log;
     // 标记累加器是否已关闭
     private volatile boolean closed;
-    // 正在进行的刷新操作数量
+    // 正在等待 flush 完成的线程的数量
+    // 如果线程执行了 flush，一般都会阻塞等待所有 batch 发送完成
     private final AtomicInteger flushesInProgress;
-    // 正在进行的追加操作数量
+    // 正在执行 append 操作的线程数量
+    // append 方法内部只会对 dq 进行加锁（TopicPartition 维度），所以不同的 TopicPartition 之间是并发的
     private final AtomicInteger appendsInProgress;
     // 批次大小（字节）
     private final int batchSize;
@@ -88,8 +90,8 @@ public final class RecordAccumulator {
     // 传递超时时间（毫秒）
     private final int deliveryTimeoutMs;
     // 缓冲池，用于内存管理
-    // 每次添加消息的时候，就先从 free 中 allocate 一块内存；如果消息发送失败就会 deallocate
-    // 如果消息发送的时候，发现 sender 出问题了；也会触发 deallocate
+    // 每次添加消息的时候，就先从 free 中 allocate 一块内存；
+    // 如果需要的大小是 poolableSize 的值，那么对应的 ByteBuffer 就被多次复用；否则依靠垃圾收集器回收（deallocate）
     private final BufferPool free;
     // 时间实例，用于获取当前时间
     private final Time time;
@@ -97,12 +99,17 @@ public final class RecordAccumulator {
     private final ApiVersions apiVersions;
     // 存储每个主题分区的批次队列
     private final ConcurrentMap<TopicPartition, Deque<ProducerBatch>> batches;
-    // 存储未完成的批次
+    // 存储未完成的批次，未完成是指没有被 abort 或 complete（complete 包括 ack 成功了的，以及感知异常后 batch 自行关闭了的）
     private final IncompleteBatches incomplete;
-    // 以下变量仅由发送线程访问，因此不需要保护它们。
+
+    // 以下变量仅由 sender 线程访问，因此不需要保护它们。
+
     // 存储已静音的主题分区
+    // （如果需要保证消息的顺序性，那么在一次发送之后，就会把这个 partition 添加到 muted 集合中，保证该 partition 的 inFlight 的 batch 只有一个）
+    // 得到 server 的响应之后，会将其从 muted 集合中移除
     private final Set<TopicPartition> muted;
-    // 当前排空索引
+    // 上一个发送的主题分区对应的数组索引下标
+    // 由于每次排空都是 node 维度的，所以这个值单独是没有价值的，主要是为了避免每次都从头开始遍历
     private int drainIndex;
     // 事务管理器
     private final TransactionManager transactionManager;
@@ -292,7 +299,7 @@ public final class RecordAccumulator {
                     throw new KafkaException("Producer closed while send in progress");
 
                 // 再次尝试追加到现有批次
-                // 两次 try 之间可能有其他线程插入了新的批次，所以需要再次尝试追加
+                // 两个 synchronized 之间可能有其他线程插入了针对该 topicPartition 的新的批次，所以这里会再 try 一次
                 RecordAppendResult appendResult = tryAppend(timestamp, key, value, headers, callback, dq, nowMs);
                 if (appendResult != null) {
                     // Somebody else found us a batch, return the one we waited for! Hopefully this doesn't happen often...
@@ -302,9 +309,9 @@ public final class RecordAccumulator {
                 // 创建新的批次并追加记录
                 // 基于之前 allocate 的 buffer 和 magic 数创建 MemoryRecordsBuilder
                 MemoryRecordsBuilder recordsBuilder = recordsBuilder(buffer, maxUsableMagic);
-                // 基于 topicPartition、recordsBuilder 和 nowMs 创建 ProducerBatch
+                // 基于 topicPartition、recordsBuilder 和 nowMs 创建一个新的 batch
                 ProducerBatch batch = new ProducerBatch(tp, recordsBuilder, nowMs);
-                // 尝试将记录追加到新的 ProducerBatch
+                // 调用 batch.tryAppend 方法，并保证 append 成功，否则抛异常
                 FutureRecordMetadata future = Objects.requireNonNull(batch.tryAppend(timestamp, key, value, headers,
                         callback, nowMs));
 
@@ -320,7 +327,7 @@ public final class RecordAccumulator {
                 return new RecordAppendResult(future, dq.size() > 1 || batch.isFull(), true, false);
             }
         } finally {
-            // 如果 buffer 未被使用，释放它
+            // 如果 buffer 未被使用，释放它；说明前面抛异常
             if (buffer != null)
                 free.deallocate(buffer);
             // 减少正在进行的追加操作计数
@@ -356,21 +363,32 @@ public final class RecordAccumulator {
         ProducerBatch last = deque.peekLast();
         // 如果 last 不为空，那么尝试追加记录
         if (last != null) {
+            // 这里调用 batch 的 tryAppend 方法
             FutureRecordMetadata future = last.tryAppend(timestamp, key, value, headers, callback, nowMs);
             // 如果得到的 future 为空，说明 last 已满，需要创建新的批次
             if (future == null)
                 last.closeForRecordAppends();
             else
-                // 将 append 结构封装成 RecordAppendResult 返回
+                // 将 batch.tryAppend 的结果再封装一层
                 return new RecordAppendResult(future, deque.size() > 1 || last.isFull(), false, false);
         }
+        // 到了这里，说明消息是没能 append 成功的；因此返回一个 null
         return null;
     }
 
+    /**
+     * 判断指定主题分区是否被静音
+     *
+     * @param tp 主题分区
+     * @return 如果被静音，则返回 true；否则返回 false
+     */
     private boolean isMuted(TopicPartition tp) {
         return muted.contains(tp);
     }
 
+    /**
+     * 重置下一个批次过期的最早时间
+     */
     public void resetNextBatchExpiryTime() {
         // 将下一个批次过期的最早时间设置为 Long.MAX_VALUE
         nextBatchExpiryTimeMs = Long.MAX_VALUE;
@@ -391,6 +409,7 @@ public final class RecordAccumulator {
 
     /**
      * Get a list of batches which have been sitting in the accumulator too long and need to be expired.
+     * <p>
      * 获取在累加器中停留时间过长且需要过期的批次列表。
      * 其实就是从 ConcurrentHashMap 中的每一个 entry 中的 Deque<ProducerBatch> 中移除过期的 ProducerBatch
      */
@@ -403,12 +422,14 @@ public final class RecordAccumulator {
             Deque<ProducerBatch> deque = entry.getValue();
             // 加锁，防止多线程并发访问
             synchronized (deque) {
+                // 遍历 deque 中的每一个元素，直到找到一个未过期的 ProducerBatch
                 while (!deque.isEmpty()) {
                     ProducerBatch batch = deque.getFirst();
-                    // 如果 deque 不为空，且第一个 ProducerBatch 的过期时间小于当前时间，
-                    // 那么将其从 deque 中移除，并将其添加到 expiredBatches 中
+                    // 判断当前栈顶的 batch 是否已经过期了
                     if (batch.hasReachedDeliveryTimeout(deliveryTimeoutMs, now)) {
+                        // 如果已经过期，那么从 deque 中移除，并将其添加到 expiredBatches 中
                         deque.poll();
+                        // 中止该 batch，但是不会去触发它的 callback
                         batch.abortRecordAppends();
                         expiredBatches.add(batch);
                     } else {
@@ -428,14 +449,14 @@ public final class RecordAccumulator {
     /**
      * Re-enqueue the given record batch in the accumulator. In Sender.completeBatch method, we check
      * whether the batch has reached deliveryTimeoutMs or not. Hence we do not do the delivery timeout check here.
+     * <p>
      * 重新将给定的记录批次排队到累加器中。
      * 在 Sender.completeBatch 方法中，我们检查批次是否已达到 deliveryTimeoutMs。
      * 因此，我们在这里不进行传递超时检查。
      */
     public void reenqueue(ProducerBatch batch, long now) {
-        // 在 ProducerBatch 中设置重新入队时间
+        // 让 batch 感知到自身的 reenqueue 操作，进而修改内部的一些信息
         batch.reenqueued(now);
-        // 从 concurrentMap 中获取或创建指定 TopicPartition 的 Deque<ProducerBatch>
         Deque<ProducerBatch> deque = getOrCreateDeque(batch.topicPartition);
         // 加锁，防止多线程并发访问
         synchronized (deque) {
@@ -443,12 +464,15 @@ public final class RecordAccumulator {
             if (transactionManager != null)
                 insertInSequenceOrder(deque, batch);
             else
+                // 这里会将 batch 放到 deque 的队首
                 deque.addFirst(batch);
         }
     }
 
     /**
      * Split the big batch that has been rejected and reenqueue the split batches in to the accumulator.
+     * <p>
+     *     分割已被拒绝的大批次，并将分割后的批次重新排队到累加器中。
      *
      * @return the number of split batches.
      * 分割已被拒绝的大批次，并将分割后的批次重新排队到累加器中。
@@ -461,9 +485,11 @@ public final class RecordAccumulator {
         // 有几种不同的方法可以重置。我们选择了最保守的方法，以确保分割不会太频繁。
         CompressionRatioEstimator.setEstimation(bigBatch.topicPartition.topic(), compression,
                 Math.max(1.0f, (float) bigBatch.compressionRatio()));
+
         // 将大批次分割为多个小批次
         Deque<ProducerBatch> dq = bigBatch.split(this.batchSize);
         int numSplitBatches = dq.size();
+
         // 获取 concurrentMap 中的当前 bigBatch 对应的 TopicPartition 对应的 Deque<ProducerBatch>
         Deque<ProducerBatch> partitionDequeue = getOrCreateDeque(bigBatch.topicPartition);
         // 将多个小批次重新添加到 concurrentMap 中
@@ -477,6 +503,7 @@ public final class RecordAccumulator {
                     transactionManager.addInFlightBatch(batch);
                     insertInSequenceOrder(partitionDequeue, batch);
                 } else {
+                    // 这里也是放在了队首
                     partitionDequeue.addFirst(batch);
                 }
             }
@@ -586,7 +613,8 @@ public final class RecordAccumulator {
         // 存储未知领导者的主题
         Set<String> unknownLeaderTopics = new HashSet<>();
 
-        // 检查是否有线程正在阻塞等待 BufferPool 释放空间
+        // 检查是否有线程正在阻塞等待 BufferPool 释放空间；
+        // 如果有，说明需要尽快发送数据来释放空间
         boolean exhausted = this.free.queued() > 0;
         
         // 遍历所有主题分区的批次
@@ -595,11 +623,14 @@ public final class RecordAccumulator {
             synchronized (deque) {
                 // When producing to a large number of partitions, this path is hot and deques are often empty.
                 // We check whether a batch exists first to avoid the more expensive checks whenever possible.
-                // 在向大量分区生产时，此路径很热，并且双端队列通常为空。
-                // 首先检查是否存在批次，以避免尽可能多的昂贵检查。
+                // 在向大量分区发送消息时，这部分同步锁竞争比较激烈，并且双端队列通常为空。
+                // 首先检查是否存在批次，以尽可能多避免后续的昂贵检查。
                 ProducerBatch batch = deque.peekFirst();
                 if (batch != null) {
                     TopicPartition part = entry.getKey();
+                    // 这个 cluster 是调用方给的，即 sender 给的
+                    // 如果 accumulator 通过 cluster 不知道 leader 是谁，那么 sender 肯定也不知道
+                    // 不知道的原因可能是因为 replica 发生了 leader 切换，而 metadata 只做了部分更新
                     Node leader = cluster.leaderFor(part);
                     if (leader == null) {
                         // This is a partition for which leader is not known, but messages are available to send.
@@ -648,7 +679,9 @@ public final class RecordAccumulator {
 
     /**
      * Check whether there are any batches which haven't been drained
+     * <p>
      * 检查是否存在任何未排空的批次
+     * 当 sender 在被 close 的时候会调用这个方法来检查是否还有未排空的批次，进而判断自身是否可以关闭
      */
     public boolean hasUndrained() {
         // 遍历所有主题分区的批次队列
@@ -729,18 +762,18 @@ public final class RecordAccumulator {
             PartitionInfo part = parts.get(drainIndex);
             // 创建 TopicPartition 对象
             TopicPartition tp = new TopicPartition(part.topic(), part.partition());
-            // 更新 drainIndex
+            // 更新下一次迭代的索引
             this.drainIndex = (this.drainIndex + 1) % parts.size();
 
             // Only proceed if the partition has no in-flight batches.
-            // 如果分区有 in-flight 的批次，跳过
-            // 这里是为了站在 producer 角度保证消息的顺序性，如果有 in-flight 的批次，那么就不会再往这个分区发送消息
+            // 如果当前分区被静音，跳过；
+            // 即说明当前 producer 保证消息的顺序性，且这个分区存在 in-flight 的批次，那么就不会再往这个分区发送消息
             if (isMuted(tp))
                 continue;
 
             // 获取指定分区的双端队列
             Deque<ProducerBatch> deque = getDeque(tp);
-            // 如果双端队列为空，跳过
+            // 如果双端队列为空，跳过；即说明这个分区没有消息
             if (deque == null)
                 continue;
 
@@ -754,13 +787,15 @@ public final class RecordAccumulator {
                     continue;
 
                 // first != null
-                // 如果第一个批次尝试次数大于0，并且等待时间小于重试回退时间，跳过
+                // 如果第一个批次尝试次数大于 0，并且等待时间小于重试回退时间，跳过
+                // 注意，这个 continue 会导致在本次发送中跳过这个分区的所有批次
                 boolean backoff = first.attempts() > 0 && first.waitedTimeMs(now) < retryBackoffMs;
                 // Only drain the batch if it is not during backoff period.
                 if (backoff)
                     continue;
 
                 // 如果在增加了这个批次之后，大小超过了 maxSize && 此时 ready 中已经有的准备发送的批次，那么就跳出循环
+                // 注意，这里有两个判断条件；如果大小超过了，但是此时 ready 是空的，那么也可能会发送这条消息（猜测是去触发 split？）
                 if (size + first.estimatedSizeInBytes() > maxSize && !ready.isEmpty()) {
                     // there is a rare case that a single batch size is larger than the request size due to
                     // compression; in this case we will still eventually send this batch in a single request
@@ -768,7 +803,7 @@ public final class RecordAccumulator {
                     // 在单个请求中发送这个批次
                     break;
                 } else {
-                    // 如果需要停止为分区清空批次，跳过
+                    // 如果需要停止为分区清空批次，跳过（事务相关的校验）
                     if (shouldStopDrainBatchesForPartition(first, tp))
                         break;
 
@@ -813,9 +848,9 @@ public final class RecordAccumulator {
                         // 将批次添加到事务管理器中
                         transactionManager.addInFlightBatch(batch);
                     }
-                    // 关闭批次
+                    // 关闭当前批次
                     batch.close();
-                    // 计算批次大小
+                    // 根据批次大小更新 size，即请求中的消息大小
                     size += batch.records().sizeInBytes();
                     // 将批次添加到已准备好发送的批次列表中
                     ready.add(batch);
@@ -932,6 +967,7 @@ public final class RecordAccumulator {
      * package private for test
      */
     boolean flushInProgress() {
+        // 这个方法会在 ready 的时候被调用，一旦它返回 true，即代表有线程正在等待 flush，那么 ready 方法就会认为所有 batch 都是 sendable 的
         return flushesInProgress.get() > 0;
     }
 
@@ -942,6 +978,8 @@ public final class RecordAccumulator {
 
     /**
      * Initiate the flushing of data from the accumulator...this makes all requests immediately ready
+     * <p>
+     *     启动累加器中数据的刷新...这会使所有请求立即准备就绪
      */
     public void beginFlush() {
         this.flushesInProgress.getAndIncrement();
@@ -1027,12 +1065,12 @@ public final class RecordAccumulator {
             Deque<ProducerBatch> dq = getDeque(batch.topicPartition);
             // 同步操作
             synchronized (dq) {
-                // 中止记录追加
+                // 中止记录追加，不会触发回调
                 batch.abortRecordAppends();
                 // 从双端队列中移除该批次
                 dq.remove(batch);
             }
-            // 中止该批次
+            // 中止该批次，会触发回调
             batch.abort(reason);
             // 释放该批次
             deallocate(batch);
@@ -1055,13 +1093,13 @@ public final class RecordAccumulator {
                 // 如果事务管理器不为空且批次没有序列号，或者事务管理器为空且批次未关闭，则中止该批次
                 if ((transactionManager != null && !batch.hasSequence()) || (transactionManager == null && !batch.isClosed())) {
                     aborted = true;
-                    // 中止记录追加
+                    // 中止记录追加，不会触发回调
                     batch.abortRecordAppends();
                     // 从双端队列中移除该批次
                     dq.remove(batch);
                 }
             }
-            // 如果中止了，则中止该批次
+            // 如果中止了，则中止该批次，会触发回调
             if (aborted) {
                 batch.abort(reason);
                 // 释放该批次

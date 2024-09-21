@@ -28,19 +28,26 @@ import java.util.stream.Collectors;
  */
 class IncompleteBatches {
     // 内部是一个普通的 HashSet
+    // 但是所有的操作都是在 synchronized 块中进行的
     private final Set<ProducerBatch> incomplete;
 
     public IncompleteBatches() {
         this.incomplete = new HashSet<>();
     }
 
-    // 但是所有的操作都是在 synchronized 块中进行的
+    // RecordAccumulator#append() 方法中新建 ProducerBatch 对象后，会调用此方法将其添加到 incomplete 集合中
+    // 或者将一个太大的 batch 进行 split 后，也会调用此方法将新的 batch 添加到 incomplete 集合中
     public void add(ProducerBatch batch) {
         synchronized (incomplete) {
             this.incomplete.add(batch);
         }
     }
 
+    // 当 batch 需要被 deallocate 时，会调用此方法将其从 incomplete 集合中移除
+    // 能被 deallocate 的 batch 有三种情况：
+    // 1. batch 已经被成功发送到 broker，且 broker 已经返回了 ack（然后 batch 被调用了 complete 方法）
+    // 2. batch 过大，需要被 split
+    // 3. batch 被人为的 abort 了
     public void remove(ProducerBatch batch) {
         synchronized (incomplete) {
             boolean removed = this.incomplete.remove(batch);

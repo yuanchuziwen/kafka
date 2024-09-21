@@ -130,6 +130,8 @@ public final class ProducerBatch {
             this.maxRecordSize = Math.max(this.maxRecordSize, AbstractRecords.estimateSizeInBytesUpperBound(magic(),
                     recordsBuilder.compressionType(), key, value, headers));
             this.lastAppendTime = now;
+            // 这个 FutureRecordMetadata 实现了 Future 接口，内部的 get 方法会触发针对 this.produceFuture 的阻塞
+            // this.produceFuture 是 batch 维度的，内部是一个 CountDownLatch，只有当 batch 完成时才会 countDown
             FutureRecordMetadata future = new FutureRecordMetadata(this.produceFuture, this.recordCount,
                                                                    timestamp,
                                                                    key == null ? -1 : key.length,
@@ -464,6 +466,9 @@ public final class ProducerBatch {
     /**
      * Release resources required for record appends (e.g. compression buffers). Once this method is called, it's only
      * possible to update the RecordBatch header.
+     * <p>
+     *     释放 append record 所需的资源（例如压缩缓冲区）。
+     *     一旦调用此方法，就只能更新 RecordBatch 标头，无法再 append record 了。
      */
     public void closeForRecordAppends() {
         recordsBuilder.closeForRecordAppends();
@@ -485,9 +490,10 @@ public final class ProducerBatch {
      * read. This is used in scenarios where we want to ensure a batch ultimately gets aborted, but in which
      * it is not safe to invoke the completion callbacks (e.g. because we are holding a lock, such as
      * when aborting batches in {@link RecordAccumulator}).
-     * 中止记录生成器并重置底层缓冲区的状态。这是在使用 {@link #abort(RuntimeException)} 中中止批处理之前使用的，
-     * 并确保无法读取先前附加的任何记录。这在我们希望确保批处理最终被中止的情况下使用，但在这种情况下，
-     * 不安全调用完成回调（例如，因为我们持有锁，例如在 {@link RecordAccumulator} 中中止批处理时）。
+     * <p>
+     * 中止 record builder 并重置底层 ByteBuffer 的状态。
+     * 它会在调用 {@link #abort(RuntimeException)} 之前使用，并确保无法读取先前附加的任何记录。
+     * 该方法的调用场景是：我们希望中止当前 batch，但是不去调用 callback 方法
      */
     public void abortRecordAppends() {
         recordsBuilder.abort();
