@@ -45,6 +45,7 @@ import java.util.Objects;
  * A {@link Records} implementation backed by a ByteBuffer. This is used only for reading or
  * modifying in-place an existing buffer of record batches. To create a new buffer see {@link MemoryRecordsBuilder},
  * or one of the {@link #builder(ByteBuffer, byte, CompressionType, TimestampType, long)} variants.
+ * <p>
  * 一个 {@link Records} 的实现，由一个 ByteBuffer 支持。这个类只用于读取或修改现有的记录批次缓冲区。
  * 要创建一个新的缓冲区，请参见 {@link MemoryRecordsBuilder}，或 {@link #builder(ByteBuffer, byte, CompressionType, TimestampType, long)} 的变体之一。
  */
