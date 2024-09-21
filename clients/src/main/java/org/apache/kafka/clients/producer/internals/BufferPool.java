@@ -58,13 +58,15 @@ public class BufferPool {
     // 总内存
     private final long totalMemory;
     // 可池化大小
-    // 这个 poolableSize 就是 batch.size 中配置的大小；即一个批次的大小
+    // 只有当每次分配的空间大小等于 poolableSize 时，这些块才会被放到 free 列表中实现共享
     private final int poolableSize;
     // 重入锁
     private final ReentrantLock lock;
     // 空闲缓冲区队列
     private final Deque<ByteBuffer> free;
     // 等待条件队列
+    // 每个线程在尝试 allocate 内存时，如果发现内存不足，会将自己加入到 waiters 队列中
+    // 然后为了方便自己管理这些线程，他们会各自创建一个 condition，而不是共用一个 condition
     private final Deque<Condition> waiters;
     // 度量指标
     private final Metrics metrics;
@@ -73,7 +75,7 @@ public class BufferPool {
     // 等待时间传感器
     private final Sensor waitTime;
     /** Total available memory is the sum of nonPooledAvailableMemory and the number of byte buffers in free * poolableSize.  */
-    // 总可用内存是 nonPooledAvailableMemory 和 free 中字节缓冲区数量 * poolableSize 的总和
+    // 所有当前可用内存是 nonPooledAvailableMemory 和 free 中字节缓冲区数量 * poolableSize 的总和
     private long nonPooledAvailableMemory;
     // 是否关闭
     private boolean closed;
@@ -82,7 +84,8 @@ public class BufferPool {
     TODO
     理解一下 BufferPool 中的缓冲区：
     1. 一开始的时候，所有的空间都没有被用过，即 nonPooledAvailableMemory = totalMemory
-    2. 当有线程第一次调用 allocate 方法时，会从 nonPooledAvailableMemory 中分配一部分空间，然后将剩余的空间放到 free 列表中
+    2. 当有线程第一次调用 allocate 方法时，会从 nonPooledAvailableMemory 中减去这部分空间
+    3. 如果线程归还了之前分配的内容，那么会判断，如果这部分空间 == poolableSize，那么会放到 free 列表中来复用；否则会再被加到 nonPooledAvailableMemory 中（实际通过垃圾收集器来回收）
      */
 
     /**
@@ -219,6 +222,7 @@ public class BufferPool {
                         // 3. append 方法中调用 BufferPool 的 allocate 方法
                         try {
                             // 这里 await 方法返回时，可能是被唤醒并拿到了锁；也可能是单纯超时了
+                            // 如果是超时了，waitingTimeElapsed 为 true
                             waitingTimeElapsed = !moreMemory.await(remainingTimeToBlockNs, TimeUnit.NANOSECONDS);
                         } finally {
                             long endWaitNs = time.nanoseconds();
