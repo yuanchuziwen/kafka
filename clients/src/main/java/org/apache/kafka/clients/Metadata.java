@@ -599,6 +599,8 @@ public class Metadata implements Closeable {
     /**
      * Record an attempt to update the metadata that failed. We need to keep track of this
      * to avoid retrying immediately.
+     * <p>
+     *     记录更新元数据的尝试失败。我们需要跟踪这一点，以避免立即重试。
      */
     public synchronized void failedUpdate(long now) {
         this.lastRefreshMs = now;

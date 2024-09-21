@@ -453,7 +453,9 @@ public class NetworkClient implements KafkaClient {
 
     // package-private for testing
     void sendInternalMetadataRequest(MetadataRequest.Builder builder, String nodeConnectionId, long now) {
+        // 创建元数据请求
         ClientRequest clientRequest = newClientRequest(nodeConnectionId, builder, now, true);
+        // 发送元数据请求
         doSend(clientRequest, true, now);
     }
 
@@ -683,38 +685,53 @@ public class NetworkClient implements KafkaClient {
      * with least recent connection attempts. This method will never choose a node for which there is no
      * existing connection and from which we have disconnected within the reconnect backoff period, or an active
      * connection which is being throttled.
-     *
+     * 
+     * 选择具有最少未完成请求的节点，该节点至少具有连接的资格。
+     * 此方法将优先选择具有现有连接的节点，但如果所有现有连接都已使用，则会选择一个至少具有连接资格的节点。
+     * 如果没有连接，此方法将优先选择最近连接尝试次数最少的节点。
+     * 此方法永远不会选择没有现有连接的节点，或者从该节点断开连接的时间在重连回退期内，或者一个正在被限速的活跃连接。
+     * 
      * @return The node with the fewest in-flight requests.
      */
     @Override
     public Node leastLoadedNode(long now) {
+        // 获取当前集群节点
         List<Node> nodes = this.metadataUpdater.fetchNodes();
+        // 如果没有节点，则抛出异常
         if (nodes.isEmpty())
             throw new IllegalStateException("There are no nodes in the Kafka cluster");
         int inflight = Integer.MAX_VALUE;
 
+        // 正在连接的节点
         Node foundConnecting = null;
+        // 可以连接的节点
         Node foundCanConnect = null;
+        // 已连接的节点
         Node foundReady = null;
 
         int offset = this.randOffset.nextInt(nodes.size());
         for (int i = 0; i < nodes.size(); i++) {
             int idx = (offset + i) % nodes.size();
             Node node = nodes.get(idx);
+            // 如果可以发送请求，则处理
             if (canSendRequest(node.idString(), now)) {
                 int currInflight = this.inFlightRequests.count(node.idString());
                 if (currInflight == 0) {
                     // if we find an established connection with no in-flight requests we can stop right away
+                    // 如果找到一个已建立连接且没有未完成请求的节点，则立即返回
                     log.trace("Found least loaded node {} connected with no in-flight requests", node);
                     return node;
                 } else if (currInflight < inflight) {
                     // otherwise if this is the best we have found so far, record that
+                    // 如果这是迄今为止找到的最佳节点，则记录
                     inflight = currInflight;
                     foundReady = node;
                 }
             } else if (connectionStates.isPreparingConnection(node.idString())) {
+                // 如果正在准备连接，则记录
                 foundConnecting = node;
             } else if (canConnect(node, now)) {
+                // 如果可以连接，则记录
                 if (foundCanConnect == null ||
                         this.connectionStates.lastConnectAttemptMs(foundCanConnect.idString()) >
                                 this.connectionStates.lastConnectAttemptMs(node.idString())) {
@@ -997,15 +1014,21 @@ public class NetworkClient implements KafkaClient {
 
     /**
      * Initiate a connection to the given node
+     * 初始化到给定节点的连接
+     * 
      * @param node the node to connect to
      * @param now current time in epoch milliseconds
      */
     private void initiateConnect(Node node, long now) {
         String nodeConnectionId = node.idString();
         try {
+            // 将节点连接状态设置为连接中
             connectionStates.connecting(nodeConnectionId, now, node.host());
+            // 获取节点的地址
             InetAddress address = connectionStates.currentAddress(nodeConnectionId);
+            // 记录日志
             log.debug("Initiating connection to node {} using address {}", node, address);
+            // 连接到节点
             selector.connect(nodeConnectionId,
                     new InetSocketAddress(address, node.port()),
                     this.socketSendBuffer,
@@ -1022,9 +1045,11 @@ public class NetworkClient implements KafkaClient {
     class DefaultMetadataUpdater implements MetadataUpdater {
 
         /* the current cluster metadata */
+        // 当前集群元数据
         private final Metadata metadata;
 
         // Defined if there is a request in progress, null otherwise
+        // 如果正在进行请求，则定义；否则为 null
         private InProgressData inProgress;
 
         DefaultMetadataUpdater(Metadata metadata) {
@@ -1039,6 +1064,7 @@ public class NetworkClient implements KafkaClient {
 
         @Override
         public boolean isUpdateDue(long now) {
+            // 没有正在进行的请求，且当前时间距离下一次元数据更新时间小于等于 0
             return !hasFetchInProgress() && this.metadata.timeToNextUpdate(now) == 0;
         }
 
@@ -1049,6 +1075,7 @@ public class NetworkClient implements KafkaClient {
         @Override
         public long maybeUpdate(long now) {
             // should we update our metadata?
+            // 判断是否需要更新元数据
             long timeToNextMetadataUpdate = metadata.timeToNextUpdate(now);
             long waitForMetadataFetch = hasFetchInProgress() ? defaultRequestTimeoutMs : 0;
 
@@ -1059,12 +1086,15 @@ public class NetworkClient implements KafkaClient {
 
             // Beware that the behavior of this method and the computation of timeouts for poll() are
             // highly dependent on the behavior of leastLoadedNode.
+            // 注意：leastLoadedNode 的行为与 poll() 的超时计算高度相关。
             Node node = leastLoadedNode(now);
             if (node == null) {
+                // 如果没有节点可用，则返回重连退避时间
                 log.debug("Give up sending metadata request since no node is available");
                 return reconnectBackoffMs;
             }
 
+            // 更新元数据
             return maybeUpdate(now, node);
         }
 
@@ -1105,11 +1135,14 @@ public class NetworkClient implements KafkaClient {
             // If any partition has leader with missing listeners, log up to ten of these partitions
             // for diagnosing broker configuration issues.
             // This could be a transient issue if listeners were added dynamically to brokers.
+            // 如果任何分区具有缺少监听器的领导者，则记录多达十个这样的分区，以诊断配置问题。
+            // 如果监听器动态添加到 broker，这可能是一个短暂的问题。
             List<TopicPartition> missingListenerPartitions = response.topicMetadata().stream().flatMap(topicMetadata ->
                 topicMetadata.partitionMetadata().stream()
                     .filter(partitionMetadata -> partitionMetadata.error == Errors.LISTENER_NOT_FOUND)
                     .map(partitionMetadata -> new TopicPartition(topicMetadata.topic(), partitionMetadata.partition())))
                 .collect(Collectors.toList());
+            // 如果缺少监听器的分区不为空，则记录日志
             if (!missingListenerPartitions.isEmpty()) {
                 int count = missingListenerPartitions.size();
                 log.warn("{} partitions have leader brokers without a matching listener, including {}",
@@ -1117,12 +1150,14 @@ public class NetworkClient implements KafkaClient {
             }
 
             // Check if any topic's metadata failed to get updated
+            // 检查是否有任何主题的元数据未更新
             Map<String, Errors> errors = response.errors();
             if (!errors.isEmpty())
                 log.warn("Error while fetching metadata with correlation id {} : {}", requestHeader.correlationId(), errors);
 
             // When talking to the startup phase of a broker, it is possible to receive an empty metadata set, which
             // we should retry later.
+            // 当与启动阶段的 broker 通信时，可能收到一个空的元数据集，我们应该稍后再重试。
             if (response.brokers().isEmpty()) {
                 log.trace("Ignoring empty metadata response with correlation id {}.", requestHeader.correlationId());
                 this.metadata.failedUpdate(now);
@@ -1140,6 +1175,8 @@ public class NetworkClient implements KafkaClient {
 
         /**
          * Return true if there's at least one connection establishment is currently underway
+         * 
+         * @return 如果至少有一个连接建立正在进行，则返回 true；否则返回 false
          */
         private boolean isAnyNodeConnecting() {
             for (Node node : fetchNodes()) {
@@ -1152,15 +1189,24 @@ public class NetworkClient implements KafkaClient {
 
         /**
          * Add a metadata request to the list of sends if we can make one
+         * 将元数据请求添加到发送列表中，如果可以发送
+         * 
+         * @param now 当前时间
+         * @param node 节点
+         * @return 如果可以发送请求，则返回请求超时时间；否则返回 Long.MAX_VALUE
          */
         private long maybeUpdate(long now, Node node) {
             String nodeConnectionId = node.idString();
 
+            // 如果可以发送请求，则将元数据请求添加到发送列表中
             if (canSendRequest(nodeConnectionId, now)) {
+                // 创建元数据请求
                 Metadata.MetadataRequestAndVersion requestAndVersion = metadata.newMetadataRequestAndVersion(now);
                 MetadataRequest.Builder metadataRequest = requestAndVersion.requestBuilder;
                 log.debug("Sending metadata request {} to node {}", metadataRequest, node);
+                // 发送元数据请求
                 sendInternalMetadataRequest(metadataRequest, nodeConnectionId, now);
+                // 设置正在进行的请求数据
                 inProgress = new InProgressData(requestAndVersion.requestVersion, requestAndVersion.isPartialUpdate);
                 return defaultRequestTimeoutMs;
             }
@@ -1168,16 +1214,21 @@ public class NetworkClient implements KafkaClient {
             // If there's any connection establishment underway, wait until it completes. This prevents
             // the client from unnecessarily connecting to additional nodes while a previous connection
             // attempt has not been completed.
+            // 如果任何节点正在连接，则等待直到连接完成。这可以防止客户端在不必要地连接到额外的节点时，连接到多个节点。
             if (isAnyNodeConnecting()) {
                 // Strictly the timeout we should return here is "connect timeout", but as we don't
                 // have such application level configuration, using reconnect backoff instead.
+                // 由于我们没有这样的应用程序级配置，因此使用重连退避时间。
                 return reconnectBackoffMs;
             }
 
+            // 如果可以连接到节点，则初始化连接
             if (connectionStates.canConnect(nodeConnectionId, now)) {
                 // We don't have a connection to this node right now, make one
+                // 我们当前没有到这个节点的连接，现在建立一个
                 log.debug("Initialize connection to node {} for sending metadata request", node);
                 initiateConnect(node, now);
+                // 返回重连退避时间
                 return reconnectBackoffMs;
             }
 
