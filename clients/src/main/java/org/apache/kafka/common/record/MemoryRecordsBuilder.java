@@ -47,7 +47,10 @@ import static org.apache.kafka.common.utils.Utils.wrapNullable;
  * 当前者发生时调用`closeForRecordAppends`很重要。这将释放诸如压缩缓冲区之类的资源，这些资源可能相对较大（LZ4为64 KB）。
  */
 public class MemoryRecordsBuilder implements AutoCloseable {
+    // 压缩率估计因子，用于估算压缩后的数据大小
     private static final float COMPRESSION_RATE_ESTIMATION_FACTOR = 1.05f;
+    
+    // 关闭的输出流，用于在 MemoryRecordsBuilder 关闭后抛出异常
     private static final DataOutputStream CLOSED_STREAM = new DataOutputStream(new OutputStream() {
         @Override
         public void write(int b) {
@@ -55,40 +58,90 @@ public class MemoryRecordsBuilder implements AutoCloseable {
         }
     });
 
+    // 记录的时间戳类型
     private final TimestampType timestampType;
+    
+    // 记录的压缩类型
     private final CompressionType compressionType;
+
     // Used to hold a reference to the underlying ByteBuffer so that we can write the record batch header and access
     // the written bytes. ByteBufferOutputStream allocates a new ByteBuffer if the existing one is not large enough,
     // so it's not safe to hold a direct reference to the underlying ByteBuffer.
+    // 用于保存底层 ByteBuffer 的引用，以便我们可以写入记录批次头部并访问已写入的字节
+    // ByteBufferOutputStream 在现有缓冲区不够大时会分配新的 ByteBuffer，所以直接引用底层 ByteBuffer 是不安全的
     private final ByteBufferOutputStream bufferStream;
+
+    // 记录格式的魔数
     private final byte magic;
+    
+    // 初始位置
     private final int initialPosition;
+    
+    // 基础偏移量
     private final long baseOffset;
+    
+    // 日志追加时间
     private final long logAppendTime;
+    
+    // 是否为控制批次
     private final boolean isControlBatch;
+    
+    // 分区 leader 的 epoch
     private final int partitionLeaderEpoch;
+    
+    // 写入限制
     private final int writeLimit;
+    
+    // 批次头部大小（字节）
     private final int batchHeaderSizeInBytes;
 
     // Use a conservative estimate of the compression ratio. The producer overrides this using statistics
     // from previous batches before appending any records.
+    // 使用保守的压缩比估计。生产者在追加任何记录之前使用先前批次的统计数据覆盖此值
     private float estimatedCompressionRatio = 1.0F;
 
     // Used to append records, may compress data on the fly
+    // 用于追加记录，可能会即时压缩数据
     private DataOutputStream appendStream;
+    
+    // 是否为事务性的
     private boolean isTransactional;
+    
+    // 生产者ID
     private long producerId;
+    
+    // 生产者epoch
     private short producerEpoch;
+    
+    // 基础序列号
     private int baseSequence;
-    private int uncompressedRecordsSizeInBytes = 0; // Number of bytes (excluding the header) written before compression
+    
+    // Number of bytes (excluding the header) written before compression
+    // 压缩前写入的字节数（不包括头部）
+    private int uncompressedRecordsSizeInBytes = 0;
+    
+    // 记录数量
     private int numRecords = 0;
+    
+    // 实际压缩比
     private float actualCompressionRatio = 1;
+    
+    // 最大时间戳
     private long maxTimestamp = RecordBatch.NO_TIMESTAMP;
+    
+    // 最大时间戳对应的偏移量
     private long offsetOfMaxTimestamp = -1;
+    
+    // 最后一条记录的偏移量
     private Long lastOffset = null;
+    
+    // 第一条记录的时间戳
     private Long firstTimestamp = null;
 
+    // 已构建的内存记录
     private MemoryRecords builtRecords;
+    
+    // 是否已中止
     private boolean aborted = false;
 
     public MemoryRecordsBuilder(ByteBufferOutputStream bufferStream,
@@ -203,9 +256,13 @@ public class MemoryRecordsBuilder implements AutoCloseable {
 
     /**
      * Close this builder and return the resulting buffer.
+     * <p>
+     * 关闭此构建器并返回结果缓冲区
+     * 
      * @return The built log buffer
      */
     public MemoryRecords build() {
+        // 如果已中止，则抛出异常
         if (aborted) {
             throw new IllegalStateException("Attempting to build an aborted record batch");
         }
@@ -215,19 +272,33 @@ public class MemoryRecordsBuilder implements AutoCloseable {
 
     /**
      * Get the max timestamp and its offset. The details of the offset returned are a bit subtle.
+     * <p>
+     * 获取最大时间戳及其偏移量。返回偏移量的细节有点微妙。
      *
      * If the log append time is used, the offset will be the last offset unless no compression is used and
      * the message format version is 0 or 1, in which case, it will be the first offset.
-     *
+     * <p>
+     * 如果使用日志追加时间，偏移量将是最后一条记录的偏移量，除非未使用压缩且消息格式版本为0或1，在这种情况下，
+     * 它将是第一条记录的偏移量。
+     * <p>
      * If create time is used, the offset will be the last offset unless no compression is used and the message
      * format version is 0 or 1, in which case, it will be the offset of the record with the max timestamp.
+     * <p>
+     * 如果使用创建时间，偏移量将是最后一条记录的偏移量，除非未使用压缩且消息格式版本为0或1，在这种情况下，
+     * 它将是具有最大时间戳的记录的偏移量。
+     * <p>
+     * If no timestamp is set, the offset will be the last offset.
+     * <p>
+     * 如果没有设置时间戳，偏移量将是最后一条记录的偏移量。
      *
      * @return The max timestamp and its offset
+
      */
     public RecordsInfo info() {
         if (timestampType == TimestampType.LOG_APPEND_TIME) {
             long shallowOffsetOfMaxTimestamp;
             // Use the last offset when dealing with record batches
+            // 如果使用日志追加时间，则使用最后一条记录的偏移量
             if (compressionType != CompressionType.NONE || magic >= RecordBatch.MAGIC_VALUE_V2)
                 shallowOffsetOfMaxTimestamp = lastOffset;
             else
@@ -252,6 +323,10 @@ public class MemoryRecordsBuilder implements AutoCloseable {
 
     /**
      * Return the sum of the size of the batch header (always uncompressed) and the records (before compression).
+     * <p>
+     * 返回批次头部大小（总是未压缩）和记录大小之和（压缩前）。
+     * 
+     * @return The sum of the size of the batch header and the records  
      */
     public int uncompressedBytesWritten() {
         return uncompressedRecordsSizeInBytes + batchHeaderSizeInBytes;
@@ -280,22 +355,30 @@ public class MemoryRecordsBuilder implements AutoCloseable {
     /**
      * Release resources required for record appends (e.g. compression buffers). Once this method is called, it's only
      * possible to update the RecordBatch header.
+     * <p>
+     * 释放用于记录追加的资源（例如压缩缓冲区）。一旦调用此方法，只能更新 RecordBatch 头部。
      */
     public void closeForRecordAppends() {
+
         if (appendStream != CLOSED_STREAM) {
             try {
+                // 关闭数据输出流
                 appendStream.close();
             } catch (IOException e) {
                 throw new KafkaException(e);
             } finally {
+                // 将 appendStream 设置为 CLOSED_STREAM
                 appendStream = CLOSED_STREAM;
             }
         }
     }
 
     public void abort() {
+        // 关闭用于记录追加的资源
         closeForRecordAppends();
+        // 将缓冲区的位置设置为初始位置
         buffer().position(initialPosition);
+        // 将 aborted 设置为 true
         aborted = true;
     }
 
@@ -311,16 +394,21 @@ public class MemoryRecordsBuilder implements AutoCloseable {
 
 
     public void close() {
+        // 如果已中止，则抛出异常
         if (aborted)
             throw new IllegalStateException("Cannot close MemoryRecordsBuilder as it has already been aborted");
 
+        // 如果已构建，则返回
         if (builtRecords != null)
             return;
 
+        // 验证生产者状态
         validateProducerState();
 
+        // 关闭用于记录追加的资源
         closeForRecordAppends();
 
+        // 如果记录数量为0，则将缓冲区的位置设置为初始位置，并构建空的 MemoryRecords
         if (numRecords == 0L) {
             buffer().position(initialPosition);
             builtRecords = MemoryRecords.EMPTY;
@@ -330,9 +418,12 @@ public class MemoryRecordsBuilder implements AutoCloseable {
             else if (compressionType != CompressionType.NONE)
                 this.actualCompressionRatio = (float) writeLegacyCompressedWrapperHeader() / this.uncompressedRecordsSizeInBytes;
 
+            // 复制缓冲区并翻转
             ByteBuffer buffer = buffer().duplicate();
             buffer.flip();
+            // 将缓冲区的位置设置为初始位置
             buffer.position(initialPosition);
+
             builtRecords = MemoryRecords.readableRecords(buffer.slice());
         }
     }
@@ -355,6 +446,9 @@ public class MemoryRecordsBuilder implements AutoCloseable {
 
     /**
      * Write the header to the default batch.
+     * <p>
+     * 写入默认批次头部
+     * 
      * @return the written compressed bytes.
      */
     private int writeDefaultBatchHeader() {
@@ -382,6 +476,9 @@ public class MemoryRecordsBuilder implements AutoCloseable {
 
     /**
      * Write the header to the legacy batch.
+     * <p>
+     * 写入旧版本批次头部
+     * 
      * @return the written compressed bytes.
      */
     private int writeLegacyCompressedWrapperHeader() {
@@ -403,8 +500,18 @@ public class MemoryRecordsBuilder implements AutoCloseable {
 
     /**
      * Append a new record at the given offset.
+     * <p>
+     * 在给定偏移量处追加新记录
+     * 
+     * @param offset The absolute offset of the record in the log buffer
+     * @param isControlRecord Whether this is a control record
+     * @param timestamp The record timestamp
+     * @param key The record key
+     * @param value The record value
+     * @param headers The record headers if there are any
      */
     private void appendWithOffset(long offset, boolean isControlRecord, long timestamp, ByteBuffer key,
+
                                   ByteBuffer value, Header[] headers) {
         try {
             if (isControlRecord != isControlBatch)
@@ -423,6 +530,7 @@ public class MemoryRecordsBuilder implements AutoCloseable {
             if (firstTimestamp == null)
                 firstTimestamp = timestamp;
 
+            // 如果 magic 大于 RecordBatch.MAGIC_VALUE_V1，则追加默认记录
             if (magic > RecordBatch.MAGIC_VALUE_V1) {
                 appendDefaultRecord(offset, timestamp, key, value, headers);
             } else {
@@ -435,6 +543,9 @@ public class MemoryRecordsBuilder implements AutoCloseable {
 
     /**
      * Append a new record at the given offset.
+     * <p>
+     * 在给定偏移量处追加新记录
+     * 
      * @param offset The absolute offset of the record in the log buffer
      * @param timestamp The record timestamp
      * @param key The record key
@@ -447,6 +558,9 @@ public class MemoryRecordsBuilder implements AutoCloseable {
 
     /**
      * Append a new record at the given offset.
+     * <p>
+     * 在给定偏移量处追加新记录
+     * 
      * @param offset The absolute offset of the record in the log buffer
      * @param timestamp The record timestamp
      * @param key The record key
@@ -459,6 +573,9 @@ public class MemoryRecordsBuilder implements AutoCloseable {
 
     /**
      * Append a new record at the given offset.
+     * <p>
+     * 在给定偏移量处追加新记录
+     * 
      * @param offset The absolute offset of the record in the log buffer
      * @param timestamp The record timestamp
      * @param key The record key
@@ -507,6 +624,9 @@ public class MemoryRecordsBuilder implements AutoCloseable {
 
     /**
      * Append a new record at the next sequential offset.
+     * <p>
+     * 在下一个连续偏移量处追加新记录
+     * 
      * @param timestamp The record timestamp
      * @param key The record key
      * @param value The record value
@@ -517,6 +637,9 @@ public class MemoryRecordsBuilder implements AutoCloseable {
 
     /**
      * Append a new record at the next sequential offset.
+     * <p>
+     * 在下一个连续偏移量处追加新记录
+     * 
      * @param timestamp The record timestamp
      * @param key The record key
      * @param value The record value
@@ -529,6 +652,9 @@ public class MemoryRecordsBuilder implements AutoCloseable {
 
     /**
      * Append a new record at the next sequential offset.
+     * <p>
+     * 在下一个连续偏移量处追加新记录
+     * 
      * @param timestamp The record timestamp
      * @param key The record key
      * @param value The record value
@@ -688,6 +814,7 @@ public class MemoryRecordsBuilder implements AutoCloseable {
         ensureOpenForRecordAppend();
         int offsetDelta = (int) (offset - baseOffset);
         long timestampDelta = timestamp - firstTimestamp;
+        // 将记录写入到输出流中
         int sizeInBytes = DefaultRecord.writeTo(appendStream, offsetDelta, timestampDelta, key, value, headers);
         recordWritten(offset, timestamp, sizeInBytes);
     }
@@ -768,7 +895,6 @@ public class MemoryRecordsBuilder implements AutoCloseable {
      * appended, then this returns true.
      *
      * 校验是否有足够的空间来添加新的记录。如果没有添加记录，则返回true。
-     *
      */
     public boolean hasRoomFor(long timestamp, byte[] key, byte[] value, Header[] headers) {
         return hasRoomFor(timestamp, wrapNullable(key), wrapNullable(value), headers);
@@ -777,16 +903,23 @@ public class MemoryRecordsBuilder implements AutoCloseable {
     /**
      * Check if we have room for a new record containing the given key/value pair. If no records have been
      * appended, then this returns true.
+     * <p>
+     * 校验是否有足够的空间来添加新的记录。如果没有添加记录，则返回 true。
      *
      * Note that the return value is based on the estimate of the bytes written to the compressor, which may not be
      * accurate if compression is used. When this happens, the following append may cause dynamic buffer
      * re-allocation in the underlying byte buffer stream.
+     * <p>
+     * 注意，返回值基于压缩器写入字节的估计值，如果使用压缩，则可能不准确。当这种情况发生时，
+     * 接下来的追加可能会导致底层的字节缓冲区流进行动态缓冲区重新分配。
      */
     public boolean hasRoomFor(long timestamp, ByteBuffer key, ByteBuffer value, Header[] headers) {
+
         if (isFull())
             return false;
 
         // We always allow at least one record to be appended (the ByteBufferOutputStream will grow as needed)
+        // 我们总是允许至少一个记录被追加（ByteBufferOutputStream 会根据需要增长）
         if (numRecords == 0)
             return true;
 
@@ -800,6 +933,7 @@ public class MemoryRecordsBuilder implements AutoCloseable {
         }
 
         // Be conservative and not take compression of the new record into consideration.
+        // 保守地不考虑新记录的压缩
         return this.writeLimit >= estimatedBytesWritten() + recordSize;
     }
 
@@ -810,8 +944,11 @@ public class MemoryRecordsBuilder implements AutoCloseable {
     public boolean isFull() {
         // note that the write limit is respected only after the first record is added which ensures we can always
         // create non-empty batches (this is used to disable batching when the producer's batch size is set to 0).
+        // 注意，只有在添加第一个记录后，写限制才会被尊重，这确保我们可以始终创建非空批次
+        // （当生产者的批量大小设置为 0 时，这用于禁用批量处理）。
         return appendStream == CLOSED_STREAM || (this.numRecords > 0 && this.writeLimit <= estimatedBytesWritten());
     }
+
 
     /**
      * Get an estimate of the number of bytes written to the underlying buffer. The returned value

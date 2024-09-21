@@ -287,6 +287,7 @@ public class BufferPool {
                 } finally {
                     // When this loop was not able to successfully terminate don't loose available memory
                     // 当这个循环无法成功终止时，不要丢失可用内存
+                    // 如果当前线程成功收集了需求的内从，那么 accumulated == 0，这里其实不会回收到内存
                     this.nonPooledAvailableMemory += accumulated;
                     // 从 waiters 队列中移除 moreMemory 这个 condition
                     this.waiters.remove(moreMemory);
@@ -308,8 +309,7 @@ public class BufferPool {
             }
         }
 
-        // 如果分配的缓冲区为空，则分配缓冲区
-        // 当代码走到了这里，其实已经获取到了足够多的空间（其实应该是适当大小的空间），然后需要分配缓冲区
+        // 如果分配的缓冲区为空，则需要从 nonPooledAvailableMemory 中分配 size 大小的空间
         if (buffer == null)
             return safeAllocateByteBuffer(size);
         else
@@ -353,17 +353,19 @@ public class BufferPool {
 
     // Protected for testing.
     protected ByteBuffer allocateByteBuffer(int size) {
+        // 这里是从 JVM 的堆内存中分配 size 大小的空间，而不是堆外内存
         return ByteBuffer.allocate(size);
     }
 
     /**
      * Attempt to ensure we have at least the requested number of bytes of memory for allocation by deallocating pooled
      * buffers (if needed)
+     * <p>
      * 尝试确保我们至少有请求的字节数的内存分配，通过释放池化的缓冲区（如果需要）
      */
     private void freeUp(int size) {
-        // 把 free 列表中的 ByteBuffer 取出来，放到 nonPooledAvailableMemory 中
-        // 直到 nonPooledAvailableMemory >= size 或者 free 列表为空
+        // 如果此时 nonPooledAvailableMemory 的大小 < size 并且 free 列表不为空
+        // 那么就释放 free 中的内存块，添加到 nonPooledAvailableMemory 中，直到 nonPooledAvailableMemory >= size 或者 free 为空
         while (!this.free.isEmpty() && this.nonPooledAvailableMemory < size)
             this.nonPooledAvailableMemory += this.free.pollLast().capacity();
     }
@@ -371,7 +373,7 @@ public class BufferPool {
     /**
      * Return buffers to the pool. If they are of the poolable size add them to the free list, otherwise just mark the
      * memory as free.
-     *
+     * <p>
      * 将缓冲区返回到池中。
      * 如果它们是可池化大小，则将它们添加到空闲列表中，否则只是将内存标记为可用。
      *
@@ -410,6 +412,7 @@ public class BufferPool {
 
     /**
      * the total free memory both unallocated and in the free list
+     * <p>
      * 总空闲内存，未分配的和在空闲列表中的
      */
     public long availableMemory() {
@@ -430,6 +433,7 @@ public class BufferPool {
 
     /**
      * Get the unallocated memory (not in the free list or in use)
+     * <p>
      * 获取未分配的内存（不在空闲列表中且未在使用中）
      */
     public long unallocatedMemory() {
@@ -445,7 +449,9 @@ public class BufferPool {
 
     /**
      * The number of threads blocked waiting on memory
-     * 等待内存的线程数
+     * <p>
+     * 等待内存的线程数，如果存在等待的线程数，说明 bufferPool 处于 exhausted 状态；
+     * 进而会影响消息发送，会导致所有的 accumulator 中关联的 node 都处于 ready 状态
      */
     public int queued() {
         // 加锁
@@ -460,6 +466,7 @@ public class BufferPool {
 
     /**
      * The buffer size that will be retained in the free list after use
+     * <p>
      * 使用后将保留在空闲列表中的缓冲区大小
      */
     public int poolableSize() {
@@ -468,6 +475,7 @@ public class BufferPool {
 
     /**
      * The total memory managed by this pool
+     * <p>
      * 此池管理的总内存
      */
     public long totalMemory() {
@@ -482,6 +490,7 @@ public class BufferPool {
     /**
      * Closes the buffer pool. Memory will be prevented from being allocated, but may be deallocated. All allocations
      * awaiting available memory will be notified to abort.
+     * <p>
      * 关闭缓冲池。
      * 将阻止分配内存，但可以释放内存。
      * 所有等待可用内存的分配将被通知中止。
