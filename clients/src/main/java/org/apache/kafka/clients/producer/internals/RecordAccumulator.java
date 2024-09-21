@@ -1024,6 +1024,7 @@ public final class RecordAccumulator {
     /**
      * This function is only called when sender is closed forcefully. It will fail all the
      * incomplete batches and return.
+     * <p>
      * 这个方法只会在 sender 被强制关闭时调用，它会中止所有未完成的批次并返回
      */
     public void abortIncompleteBatches() {

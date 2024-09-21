@@ -669,7 +669,9 @@ public class NetworkClient implements KafkaClient {
      */
     @Override
     public void close() {
+        // cas 更新状态为 `CLOSING`
         state.compareAndSet(State.ACTIVE, State.CLOSING);
+        // cas 更新状态为 `CLOSED`
         if (state.compareAndSet(State.CLOSING, State.CLOSED)) {
             this.selector.close();
             this.metadataUpdater.close();
