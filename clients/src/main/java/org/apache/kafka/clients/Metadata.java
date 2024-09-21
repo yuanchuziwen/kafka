@@ -275,6 +275,8 @@ public class Metadata implements Closeable {
 
     /**
      * Return the cached partition info if it exists and a newer leader epoch isn't known about.
+     * <p>
+     *     如果存在缓存的分区信息并且没有关于更新的 leader epoch，则返回缓存的分区信息。
      */
     synchronized Optional<MetadataResponse.PartitionMetadata> partitionMetadataIfCurrent(TopicPartition topicPartition) {
         Integer epoch = lastSeenLeaderEpochs.get(topicPartition);
@@ -314,6 +316,8 @@ public class Metadata implements Closeable {
 
     /**
      * Update metadata assuming the current request version.
+     * <p>
+     *     假设当前请求版本更新元数据。
      *
      * For testing only.
      */
@@ -324,12 +328,19 @@ public class Metadata implements Closeable {
     /**
      * Updates the cluster metadata. If topic expiry is enabled, expiry time
      * is set for topics if required and expired topics are removed from the metadata.
+     * <p>
+     *     更新集群元数据。
+     *     如果启用了主题过期，将为主题设置过期时间，如果需要，将从元数据中删除过期的主题。
      *
      * @param requestVersion The request version corresponding to the update response, as provided by
      *     {@link #newMetadataRequestAndVersion(long)}.
+     *                       更新响应对应的请求版本，由 newMetadataRequestAndVersion(long) 提供。
      * @param response metadata response received from the broker
+     *                 从 broker 接收到的元数据响应
      * @param isPartialUpdate whether the metadata request was for a subset of the active topics
+     *                        元数据请求是否为活动主题的子集
      * @param nowMs current time in milliseconds
+     *              当前时间（毫秒）
      */
     public synchronized void update(int requestVersion, MetadataResponse response, boolean isPartialUpdate, long nowMs) {
         Objects.requireNonNull(response, "Metadata response cannot be null");
@@ -384,23 +395,29 @@ public class Metadata implements Closeable {
 
     /**
      * Transform a MetadataResponse into a new MetadataCache instance.
+     * <p>
+     *     将 MetadataResponse 转换为新的 MetadataCache 实例。
      */
     private MetadataCache handleMetadataResponse(MetadataResponse metadataResponse, boolean isPartialUpdate, long nowMs) {
         // All encountered topics.
+        // 所有遇到的主题。
         Set<String> topics = new HashSet<>();
 
         // Retained topics to be passed to the metadata cache.
+        // 要传递给元数据缓存的保留主题。
         Set<String> internalTopics = new HashSet<>();
         Set<String> unauthorizedTopics = new HashSet<>();
         Set<String> invalidTopics = new HashSet<>();
 
         List<MetadataResponse.PartitionMetadata> partitions = new ArrayList<>();
         Map<String, Uuid> topicIds = new HashMap<>();
+        // 遍历 metadataResponse 中的所有主题
         for (MetadataResponse.TopicMetadata metadata : metadataResponse.topicMetadata()) {
             String topicName = metadata.topic();
             Uuid topicId = metadata.topicId();
             topics.add(topicName);
             // We can only reason about topic ID changes when both IDs are valid, so keep oldId null unless the new metadata contains a topic ID
+            // 只有在两个 ID 都有效时，我们才能推理主题 ID 的变化，所以除非新的元数据包含主题 ID，否则将 oldId 保持为 null
             Uuid oldTopicId = null;
             if (!Uuid.ZERO_UUID.equals(topicId)) {
                 topicIds.put(topicName, topicId);
@@ -409,16 +426,20 @@ public class Metadata implements Closeable {
                 topicId = null;
             }
 
+            // 如果主题不满足 retainTopic 条件，则跳过
             if (!retainTopic(topicName, metadata.isInternal(), nowMs))
                 continue;
 
+            // 如果是内部主题，添加到 internalTopics
             if (metadata.isInternal())
                 internalTopics.add(topicName);
 
+            // 如果元数据没有错误，则更新分区元数据
             if (metadata.error() == Errors.NONE) {
                 for (MetadataResponse.PartitionMetadata partitionMetadata : metadata.partitionMetadata()) {
                     // Even if the partition's metadata includes an error, we need to handle
                     // the update to catch new epochs
+                    // 即使分区元数据包含错误，我们也需要处理更新以捕获新的 epoch
                     updateLatestMetadata(partitionMetadata, metadataResponse.hasReliableLeaderEpochs(), topicId, oldTopicId)
                         .ifPresent(partitions::add);
 
@@ -429,6 +450,7 @@ public class Metadata implements Closeable {
                     }
                 }
             } else {
+                // 如果元数据有错误，并且错误是 InvalidMetadataException，则请求更新
                 if (metadata.error().exception() instanceof InvalidMetadataException) {
                     log.debug("Requesting metadata update for topic {} due to error {}", topicName, metadata.error());
                     requestUpdate();
@@ -442,10 +464,13 @@ public class Metadata implements Closeable {
         }
 
         Map<Integer, Node> nodes = metadataResponse.brokersById();
+        // 如果 isPartialUpdate 为 true，则合并元数据响应
         if (isPartialUpdate)
             return this.cache.mergeWith(metadataResponse.clusterId(), nodes, partitions,
                 unauthorizedTopics, invalidTopics, internalTopics, metadataResponse.controller(), topicIds,
                 (topic, isInternal) -> !topics.contains(topic) && retainTopic(topic, isInternal, nowMs));
+
+        // 否则，创建新的 MetadataCache
         else
             return new MetadataCache(metadataResponse.clusterId(), nodes, partitions,
                 unauthorizedTopics, invalidTopics, internalTopics, metadataResponse.controller(), topicIds);
@@ -454,6 +479,14 @@ public class Metadata implements Closeable {
     /**
      * Compute the latest partition metadata to cache given ordering by leader epochs (if both
      * available and reliable) and whether the topic ID changed.
+     * <p>
+     *     计算最新的分区元数据以缓存，给定 leader epoch 的排序（如果两者都可用且可靠）和主题 ID 是否改变。
+     *
+     * @param partitionMetadata 分区元数据
+     * @param hasReliableLeaderEpoch 是否可靠的 leader epoch
+     * @param topicId 主题 ID
+     * @param oldTopicId 旧的主题 ID
+     * @return 最新的分区元数据
      */
     private Optional<MetadataResponse.PartitionMetadata> updateLatestMetadata(
             MetadataResponse.PartitionMetadata partitionMetadata,
@@ -461,6 +494,7 @@ public class Metadata implements Closeable {
             Uuid topicId,
             Uuid oldTopicId) {
         TopicPartition tp = partitionMetadata.topicPartition;
+        // 如果 leader epoch 可用且可靠，并且分区元数据包含 leader epoch
         if (hasReliableLeaderEpoch && partitionMetadata.leaderEpoch.isPresent()) {
             int newEpoch = partitionMetadata.leaderEpoch.get();
             Integer currentEpoch = lastSeenLeaderEpochs.get(tp);
@@ -469,15 +503,22 @@ public class Metadata implements Closeable {
                 // Between the time that a topic is deleted and re-created, the client may lose track of the
                 // corresponding topicId (i.e. `oldTopicId` will be null). In this case, when we discover the new
                 // topicId, we allow the corresponding leader epoch to override the last seen value.
+                // 如果新主题 ID 有效且与上次看到的主题 ID 不同，则更新元数据。
+                // 在主题删除和重新创建之间，客户端可能会失去与相应主题 ID 的关联（即 `oldTopicId` 将为 null）。
+                // 在这种情况下，当我们发现新主题 ID 时，允许相应的 leader epoch 覆盖最后看到的值。
                 log.info("Resetting the last seen epoch of partition {} to {} since the associated topicId changed from {} to {}",
                          tp, newEpoch, oldTopicId, topicId);
                 lastSeenLeaderEpochs.put(tp, newEpoch);
                 return Optional.of(partitionMetadata);
+
+                // 否则，如果当前 epoch 为 null 或者新 epoch 大于或等于当前 epoch，则更新元数据
             } else if (currentEpoch == null || newEpoch >= currentEpoch) {
                 // If the received leader epoch is at least the same as the previous one, update the metadata
                 log.debug("Updating last seen epoch for partition {} from {} to epoch {} from new metadata", tp, currentEpoch, newEpoch);
                 lastSeenLeaderEpochs.put(tp, newEpoch);
                 return Optional.of(partitionMetadata);
+
+                // 否则，忽略新的元数据并使用之前缓存的信息
             } else {
                 // Otherwise ignore the new metadata and use the previously cached info
                 log.debug("Got metadata for an older epoch {} (current is {}) for partition {}, not updating", newEpoch, currentEpoch, tp);
@@ -485,6 +526,7 @@ public class Metadata implements Closeable {
             }
         } else {
             // Handle old cluster formats as well as error responses where leader and epoch are missing
+            // 处理旧的集群格式以及缺少 leader 和 epoch 的错误响应
             lastSeenLeaderEpochs.remove(tp);
             return Optional.of(partitionMetadata.withoutLeaderEpoch());
         }
@@ -530,6 +572,7 @@ public class Metadata implements Closeable {
     }
 
     // We may be able to recover from this exception if metadata for this topic is no longer needed
+    // 我们可能能够从这个异常中恢复，如果不再需要这个主题的元数据
     private KafkaException recoverableException() {
         if (!unauthorizedTopics.isEmpty())
             return new TopicAuthorizationException(unauthorizedTopics);
@@ -621,6 +664,8 @@ public class Metadata implements Closeable {
 
     /**
      * Constructs and returns a metadata request builder for fetching cluster data and all active topics.
+     * <p>
+     *     构造并返回一个元数据请求构建器，用于获取集群数据和所有活动主题。
      *
      * @return the constructed non-null metadata builder
      */
@@ -631,6 +676,8 @@ public class Metadata implements Closeable {
     /**
      * Constructs and returns a metadata request builder for fetching cluster data and any uncached topics,
      * otherwise null if the functionality is not supported.
+     * <p>
+     *     构造并返回一个元数据请求构建器，用于获取集群数据和任何未缓存的主题，否则返回 null，如果不支持该功能。
      *
      * @return the constructed metadata builder, or null if not supported
      */
@@ -661,6 +708,10 @@ public class Metadata implements Closeable {
      * epoch if the metadata is received from a broker which does not support a sufficient Metadata API version.
      * It is also possible that we know of the leader epoch, but not the leader when it is derived
      * from an external source (e.g. a committed offset).
+     * <p>
+     *     代表元数据中已知的当前 leader 状态。
+     *     可能我们知道 leader，但不知道 epoch，如果元数据来自不支持足够的 Metadata API 版本的 broker。
+     *     也可能我们知道 leader epoch，但不知道 leader，当它是从外部源（例如，已提交的偏移量）派生时。
      */
     public static class LeaderAndEpoch {
         private static final LeaderAndEpoch NO_LEADER_OR_EPOCH = new LeaderAndEpoch(Optional.empty(), Optional.empty());

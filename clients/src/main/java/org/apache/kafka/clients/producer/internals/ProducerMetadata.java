@@ -104,11 +104,17 @@ public class ProducerMetadata extends Metadata {
 
     @Override
     public synchronized boolean retainTopic(String topic, boolean isInternal, long nowMs) {
+        // 获取这个 topic 的过期时间
         Long expireMs = topics.get(topic);
+        // 如果过期时间为 null，说明需要删除这个 topic
         if (expireMs == null) {
             return false;
+
+            // 如果 newTopics 集合中包含这个 topic，则不删除
         } else if (newTopics.contains(topic)) {
             return true;
+
+            // 否则，判断是否过期
         } else if (expireMs <= nowMs) {
             log.debug("Removing unused topic {} from the metadata list, expiryMs {} now {}", topic, expireMs, nowMs);
             topics.remove(topic);
