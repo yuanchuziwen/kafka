@@ -16,10 +16,6 @@
  */
 package org.apache.kafka.clients;
 
-import java.util.HashSet;
-import java.util.Set;
-
-import java.util.stream.Collectors;
 import org.apache.kafka.common.errors.AuthenticationException;
 import org.apache.kafka.common.utils.ExponentialBackoff;
 import org.apache.kafka.common.utils.LogContext;
@@ -29,8 +25,11 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * The state of our connection to each node in the cluster.
@@ -70,6 +69,9 @@ final class ClusterConnectionStates {
     /**
      * Return true iff we can currently initiate a new connection. This will be the case if we are not
      * connected and haven't been connected for at least the minimum reconnection backoff period.
+     * <p>
+     *     如果我们当前可以建立新连接，则返回 true。如果我们没有连接，并且至少有最小的重新连接回退期，则会出现这种情况。
+     *
      * @param id the connection id to check
      * @param now the current time in ms
      * @return true if we can initiate a new connection

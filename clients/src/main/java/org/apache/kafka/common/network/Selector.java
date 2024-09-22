@@ -385,12 +385,15 @@ public class Selector implements Selectable, AutoCloseable {
      */
     public void send(NetworkSend send) {
         String connectionId = send.destinationId();
+        // 找到和 node 关联的 channel
         KafkaChannel channel = openOrClosingChannelOrFail(connectionId);
         if (closingChannels.containsKey(connectionId)) {
             // ensure notification via `disconnected`, leave channel in the state in which closing was triggered
             this.failedSends.add(connectionId);
         } else {
             try {
+                // 将需要发送的内容放到 channel 的发送缓冲区中
+                // 并且内部会注册一个写事件到 nio.selector 上，以便在下次 nio.selector.select 的时候处理写操作
                 channel.setSend(send);
             } catch (Exception e) {
                 // update the state for consistency, the channel will be discarded after `close`
@@ -444,6 +447,7 @@ public class Selector implements Selectable, AutoCloseable {
         boolean madeReadProgressLastCall = madeReadProgressLastPoll;
         clear();
 
+        // 如果 keysWithBufferedRead 不为空，则表示有 channel 有数据需要处理
         boolean dataInBuffers = !keysWithBufferedRead.isEmpty();
 
         if (!immediatelyConnectedKeys.isEmpty() || (madeReadProgressLastCall && dataInBuffers))
@@ -451,6 +455,7 @@ public class Selector implements Selectable, AutoCloseable {
 
         if (!memoryPool.isOutOfMemory() && outOfMemory) {
             //we have recovered from memory pressure. unmute any channel not explicitly muted for other reasons
+            // 如果内存池不再处于内存不足状态，则取消静音所有未明确静音的通道
             log.trace("Broker no longer low on memory - unmuting incoming sockets");
             for (KafkaChannel channel : channels.values()) {
                 if (channel.isInMutableState() && !explicitlyMutedChannels.contains(channel)) {
@@ -461,6 +466,7 @@ public class Selector implements Selectable, AutoCloseable {
         }
 
         /* check ready keys */
+        /* 检查准备好的 keys */
         long startSelect = time.nanoseconds();
         int numReadyKeys = select(timeout);
         long endSelect = time.nanoseconds();
@@ -470,32 +476,38 @@ public class Selector implements Selectable, AutoCloseable {
             Set<SelectionKey> readyKeys = this.nioSelector.selectedKeys();
 
             // Poll from channels that have buffered data (but nothing more from the underlying socket)
+            // 从具有缓冲数据的通道中轮询（但不再从底层套接字中读取更多数据）
             if (dataInBuffers) {
-                keysWithBufferedRead.removeAll(readyKeys); //so no channel gets polled twice
+                keysWithBufferedRead.removeAll(readyKeys); // 确保没有通道被轮询两次
                 Set<SelectionKey> toPoll = keysWithBufferedRead;
-                keysWithBufferedRead = new HashSet<>(); //poll() calls will repopulate if needed
+                keysWithBufferedRead = new HashSet<>(); // poll() 调用将根据需要重新填充
                 pollSelectionKeys(toPoll, false, endSelect);
             }
 
             // Poll from channels where the underlying socket has more data
+            // 从底层套接字有更多数据的通道中轮询
             pollSelectionKeys(readyKeys, false, endSelect);
             // Clear all selected keys so that they are included in the ready count for the next select
+            // 清除所有已选择的 keys，以便它们包含在下一个 select 的准备计数中
             readyKeys.clear();
 
+            // 从立即连接的通道中轮询
             pollSelectionKeys(immediatelyConnectedKeys, true, endSelect);
             immediatelyConnectedKeys.clear();
         } else {
-            madeReadProgressLastPoll = true; //no work is also "progress"
+            madeReadProgressLastPoll = true; // 没有工作也算是“进展”
         }
 
         long endIo = time.nanoseconds();
         this.sensors.ioTime.record(endIo - endSelect, time.milliseconds());
 
         // Close channels that were delayed and are now ready to be closed
+        // 关闭那些延迟关闭且现在准备关闭的通道
         completeDelayedChannelClose(endIo);
 
         // we use the time at the end of select to ensure that we don't close any connections that
         // have just been processed in pollSelectionKeys
+        // 我们使用 select 结束时的时间来确保不会关闭刚刚在 pollSelectionKeys 中处理的任何连接
         maybeCloseOldestConnection(endSelect);
     }
 
@@ -825,12 +837,19 @@ public class Selector implements Selectable, AutoCloseable {
      * Clears all the results from the previous poll. This is invoked by Selector at the start of
      * a poll() when all the results from the previous poll are expected to have been handled.
      * <p>
+     *     清理上一次 poll 的结果，这个方法在 Selector 的 poll() 方法开始时调用，用于清理上一次 poll 的结果
+     * <p>
      * SocketServer uses {@link #clearCompletedSends()} and {@link #clearCompletedReceives()} to
      * clear `completedSends` and `completedReceives` as soon as they are processed to avoid
      * holding onto large request/response buffers from multiple connections longer than necessary.
      * Clients rely on Selector invoking {@link #clear()} at the start of each poll() since memory usage
      * is less critical and clearing once-per-poll provides the flexibility to process these results in
      * any order before the next poll.
+     * <p>
+     *     SocketServer 使用 {@link #clearCompletedSends()} 和 {@link #clearCompletedReceives()} 来清理
+     *     `completedSends` 和 `completedReceives`，以便在处理完它们后立即清理，避免长时间保留多个连接的大请求/响应缓冲区。
+     *     客户端依赖于 Selector 在每次 poll() 开始时调用 {@link #clear()}，因为内存使用不那么重要，一次 poll 清理一次提供了
+     *     在下次 poll 之前以任何顺序处理这些结果的灵活性。
      */
     private void clear() {
         this.completedSends.clear();
@@ -839,6 +858,7 @@ public class Selector implements Selectable, AutoCloseable {
         this.disconnected.clear();
 
         // Remove closed channels after all their buffered receives have been processed or if a send was requested
+        // 移除所有已关闭的 channel，这些 channel 的所有缓冲接收都已被处理，或者请求了发送
         for (Iterator<Map.Entry<String, KafkaChannel>> it = closingChannels.entrySet().iterator(); it.hasNext(); ) {
             KafkaChannel channel = it.next().getValue();
             boolean sendFailed = failedSends.remove(channel.id());

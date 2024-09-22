@@ -377,6 +377,7 @@ public class KafkaChannel implements AutoCloseable {
     }
 
     public void setSend(NetworkSend send) {
+        // 这里会增加一层校验，保证此时 send == null，来规避数据覆盖
         if (this.send != null)
             throw new IllegalStateException("Attempt to begin a send operation with prior send operation still in progress, connection id is " + id);
         this.send = send;
