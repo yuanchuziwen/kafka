@@ -92,11 +92,26 @@ import java.util.regex.Pattern;
  * Failure to close the consumer after use will leak these connections.
  * The consumer is not thread-safe. See <a href="#multithreaded">Multi-threaded Processing</a> for more details.
  *
+ * 一个从 Kafka 集群消费记录的客户端。
+ * <p>
+ * 这个客户端透明地处理 Kafka 代理的故障，并在其获取的主题分区在集群内迁移时透明地适应。
+ * 这个客户端还与代理交互，允许消费者组使用<a href="#consumergroups">消费者组</a>来平衡消费。
+ * <p>
+ * 消费者维护与必要代理的TCP连接以获取数据。
+ * 使用后未能关闭消费者将泄漏这些连接。
+ * 消费者不是线程安全的。有关更多详细信息，请参阅<a href="#multithreaded">多线程处理</a>。
+ *
  * <h3>Cross-Version Compatibility</h3>
  * This client can communicate with brokers that are version 0.10.0 or newer. Older or newer brokers may not support
  * certain features. For example, 0.10.0 brokers do not support offsetsForTimes, because this feature was added
  * in version 0.10.1. You will receive an {@link org.apache.kafka.common.errors.UnsupportedVersionException}
  * when invoking an API that is not available on the running broker version.
+ * <p>
+ *
+ * <h3>跨版本兼容性</h3>
+ * 这个客户端可以与 0.10.0 或更新版本的代理通信。较旧或较新的代理可能不支持某些功能。
+ * 例如，0.10.0 代理不支持 offsetsForTimes，因为这个功能是在 0.10.1 版本中添加的。
+ * 当调用运行中的代理版本上不可用的 API 时，你将收到一个{@link org.apache.kafka.common.errors.UnsupportedVersionException}。
  * <p>
  *
  * <h3>Offsets and Consumer Position</h3>
@@ -116,6 +131,21 @@ import java.util.regex.Pattern;
  * <p>
  * This distinction gives the consumer control over when a record is considered consumed. It is discussed in further
  * detail below.
+ *
+ * <h3>偏移量和消费者位置</h3>
+ * Kafka 为分区中的每条记录维护一个数字偏移量。这个偏移量作为该分区内记录的唯一标识符，
+ * 同时也表示消费者在分区中的位置。例如，位于位置 5 的消费者已经消费了偏移量 0 到 4 的记录，
+ * 下一个将接收偏移量为 5 的记录。对消费者用户来说，实际上有两个相关的位置概念：
+ * <p>
+ * 消费者的{@link #position(TopicPartition) 位置}给出了下一条将被给出的记录的偏移量。
+ * 它将比消费者在该分区中看到的最高偏移量大一。每次消费者在调用{@link #poll(Duration)}时接收消息，它都会自动前进。
+ * <p>
+ * {@link #commitSync() 已提交位置}是最后一个已安全存储的偏移量。如果进程失败并重启，
+ * 这是消费者将恢复到的偏移量。消费者可以选择定期自动提交偏移量；
+ * 或者可以选择通过调用其中一个提交 API（例如{@link #commitSync() commitSync}和
+ * {@link #commitAsync(OffsetCommitCallback) commitAsync}）来手动控制这个已提交位置。
+ * <p>
+ * 这种区别使消费者可以控制何时认为记录已被消费。下面将进一步详细讨论这一点。
  *
  * <h3><a name="consumergroups">Consumer Groups and Topic Subscriptions</a></h3>
  *
@@ -155,6 +185,39 @@ import java.util.regex.Pattern;
  * It is also possible for the consumer to <a href="#manualassignment">manually assign</a> specific partitions
  * (similar to the older "simple" consumer) using {@link #assign(Collection)}. In this case, dynamic partition
  * assignment and consumer group coordination will be disabled.
+ *
+ * <h3><a name="consumergroups">消费者组和主题订阅</a></h3>
+ *
+ * Kafka 使用<i>消费者组</i>的概念来允许一组进程分担消费和处理记录的工作。
+ * 这些进程可以在同一台机器上运行，也可以分布在多台机器上，以提供处理的可扩展性和容错性。
+ * 所有共享相同{@code group.id}的消费者实例将成为同一个消费者组的一部分。
+ * <p>
+ * 组中的每个消费者可以通过{@link #subscribe(Collection, ConsumerRebalanceListener) subscribe} API 之一
+ * 动态设置它想要订阅的主题列表。Kafka 将把订阅主题中的每条消息传递给每个消费者组中的一个进程。
+ * 这是通过在消费者组的所有成员之间平衡分区来实现的，使每个分区恰好分配给组中的一个消费者。
+ * 因此，如果有一个包含四个分区的主题，和一个包含两个进程的消费者组，每个进程将从两个分区消费。
+ * <p>
+ * 消费者组的成员资格是动态维护的：如果一个进程失败，分配给它的分区将被重新分配给同一组中的其他消费者。
+ * 同样，如果一个新的消费者加入组，分区将从现有消费者移动到新的消费者。
+ * 这被称为组的<i>重平衡</i>，在<a href="#failuredetection">下面</a>会有更详细的讨论。
+ * 当向其中一个订阅的主题添加新分区，或创建一个匹配{@link #subscribe(Pattern, ConsumerRebalanceListener) 订阅正则表达式}的新主题时，
+ * 也会使用组重平衡。组将通过定期的元数据刷新自动检测新分区，并将它们分配给组的成员。
+ * <p>
+ * 从概念上讲，你可以将消费者组视为由多个进程组成的单个逻辑订阅者。
+ * 作为一个多订阅者系统，Kafka 自然支持对给定主题有任意数量的消费者组，而无需复制数据（额外的消费者实际上非常便宜）。
+ * <p>
+ * 这是对消息系统中常见功能的轻微泛化。要获得类似于传统消息系统中队列的语义，
+ * 所有进程都将是单个消费者组的一部分，因此记录传递将像队列一样在组内平衡。
+ * 然而，与传统的消息系统不同，你可以有多个这样的组。
+ * 要获得类似于传统消息系统中发布-订阅的语义，每个进程将有自己的消费者组，
+ * 因此每个进程都将订阅发布到该主题的所有记录。
+ * <p>
+ * 此外，当组重新分配自动发生时，消费者可以通过{@link ConsumerRebalanceListener}得到通知，
+ * 这允许他们完成必要的应用程序级逻辑，如状态清理、手动偏移量提交等。
+ * 有关更多详细信息，请参阅<a href="#rebalancecallback">在Kafka外存储偏移量</a>。
+ * <p>
+ * 消费者也可以使用{@link #assign(Collection)}来<a href="#manualassignment">手动分配</a>特定的分区
+ * （类似于较旧的"简单"消费者）。在这种情况下，动态分区分配和消费者组协调将被禁用。
  *
  * <h3><a name="failuredetection">Detecting Consumer Failures</a></h3>
  *
@@ -196,12 +259,71 @@ import java.util.regex.Pattern;
  * Note also that you will need to {@link #pause(Collection) pause} the partition so that no new records are received
  * from poll until after thread has finished handling those previously returned.
  *
+ * <h3><a name="failuredetection">检测消费者故障</a></h3>
+ *
+ * 在订阅一组主题后，当调用{@link #poll(Duration)}时，消费者将自动加入组。
+ * poll API 的设计是为了确保消费者的活跃性。只要你继续调用 poll，消费者就会留在组中，
+ * 并继续从分配给它的分区接收消息。在底层，消费者向服务器发送定期心跳。
+ * 如果消费者崩溃或在{@code session.timeout.ms}的持续时间内无法发送心跳，
+ * 那么消费者将被视为死亡，其分区将被重新分配。
+ * <p>
+ * 消费者也可能遇到"活锁"情况，即它继续发送心跳，但没有取得进展。
+ * 为了防止消费者在这种情况下无限期地保持其分区，我们提供了一个使用{@code max.poll.interval.ms}
+ * 设置的活跃性检测机制。基本上，如果你不至少以配置的最大间隔频率调用 poll，
+ * 那么客户端将主动离开组，以便另一个消费者可以接管其分区。当这种情况发生时，
+ * 你可能会看到偏移量提交失败（由调用{@link #commitSync()}时抛出的{@link CommitFailedException}指示）。
+ * 这是一种安全机制，保证只有组的活跃成员能够提交偏移量。
+ * 因此，要留在组中，你必须继续调用 poll。
+ * <p>
+ * 消费者提供了两个配置设置来控制 poll 循环的行为：
+ * <ol>
+ *     <li><code>max.poll.interval.ms</code>：通过增加预期 poll 之间的间隔，
+ *     你可以给消费者更多时间来处理从{@link #poll(Duration)}返回的一批记录。
+ *     缺点是增加这个值可能会延迟组重平衡，因为消费者只会在调用 poll 内部加入重平衡。
+ *     你可以使用这个设置来限制完成重平衡的时间，但如果消费者实际上不能足够频繁地调用{@link #poll(Duration) poll}，
+ *     你就有可能进展更慢。</li>
+ *     <li><code>max.poll.records</code>：使用这个设置来限制单次调用 poll 返回的总记录数。
+ *     这可以使预测每个 poll 间隔内必须处理的最大值变得更容易。
+ *     通过调整这个值，你可能能够减少 poll 间隔，这将减少组重平衡的影响。</li>
+ * </ol>
+ * <p>
+ * 对于消息处理时间变化不可预测的用例，这两个选项都可能不够。
+ * 处理这些情况的推荐方法是将消息处理移到另一个线程，这允许消费者继续调用{@link #poll(Duration) poll}，
+ * 而处理器仍在工作。必须注意确保已提交的偏移量不会超过实际位置。
+ * 通常，你必须禁用自动提交，并且只有在线程完成处理记录后才手动提交已处理的偏移量
+ * （取决于你需要的传递语义）。
+ * 还要注意，你需要{@link #pause(Collection) 暂停}分区，以便在线程完成处理之前返回的那些记录之前，
+ * 不会从 poll 接收到新的记录。
+ *
  * <h3>Usage Examples</h3>
  * The consumer APIs offer flexibility to cover a variety of consumption use cases. Here are some examples to
  * demonstrate how to use them.
  *
+ * <h3>使用示例</h3>
+ * 消费者 API 提供了灵活性，以覆盖各种消费用例。这里有一些示例来演示如何使用它们。
+ *
  * <h4>Automatic Offset Committing</h4>
  * This example demonstrates a simple usage of Kafka's consumer api that relies on automatic offset committing.
+ * <p>
+ * <pre>
+ *     Properties props = new Properties();
+ *     props.setProperty(&quot;bootstrap.servers&quot;, &quot;localhost:9092&quot;);
+ *     props.setProperty(&quot;group.id&quot;, &quot;test&quot;);
+ *     props.setProperty(&quot;enable.auto.commit&quot;, &quot;true&quot;);
+ *     props.setProperty(&quot;auto.commit.interval.ms&quot;, &quot;1000&quot;);
+ *     props.setProperty(&quot;key.deserializer&quot;, &quot;org.apache.kafka.common.serialization.StringDeserializer&quot;);
+ *     props.setProperty(&quot;value.deserializer&quot;, &quot;org.apache.kafka.common.serialization.StringDeserializer&quot;);
+ *     KafkaConsumer&lt;String, String&gt; consumer = new KafkaConsumer&lt;&gt;(props);
+ *     consumer.subscribe(Arrays.asList(&quot;foo&quot;, &quot;bar&quot;));
+ *     while (true) {
+ *         ConsumerRecords&lt;String, String&gt; records = consumer.poll(Duration.ofMillis(100));
+ *         for (ConsumerRecord&lt;String, String&gt; record : records)
+ *             System.out.printf(&quot;offset = %d, key = %s, value = %s%n&quot;, record.offset(), record.key(), record.value());
+ *     }
+ * </pre>
+ *
+ * <h4>自动偏移量提交</h4>
+ * 这个例子演示了 Kafka 消费者 API 的一个简单用法，它依赖于自动偏移量提交。
  * <p>
  * <pre>
  *     Properties props = new Properties();
@@ -234,6 +356,18 @@ import java.util.regex.Pattern;
  * The deserializer settings specify how to turn bytes into objects. For example, by specifying string deserializers, we
  * are saying that our record's key and value will just be simple strings.
  *
+ * 通过使用配置{@code >bootstrap.servers}指定一个或多个要联系的代理列表来引导与集群的连接。
+ * 这个列表只用于发现集群中的其余代理，不需要是集群中服务器的详尽列表
+ * （尽管你可能想指定多个，以防客户端连接时有服务器宕机）。
+ * <p>
+ * 设置{@code enable.auto.commit}意味着偏移量会自动提交，频率由配置{@code auto.commit.interval.ms}控制。
+ * <p>
+ * 在这个例子中，消费者作为一个名为<i>test</i>的消费者组的一部分订阅了主题<i>foo</i>和<i>bar</i>，
+ * 这是通过{@code group.id}配置的。
+ * <p>
+ * 反序列化器设置指定如何将字节转换为对象。例如，通过指定字符串反序列化器，
+ * 我们表示我们的记录的键和值将只是简单的字符串。
+ *
  * <h4>Manual Offset Control</h4>
  *
  * Instead of relying on the consumer to periodically commit consumed offsets, users can also control when records
@@ -265,11 +399,35 @@ import java.util.regex.Pattern;
  *     }
  * </pre>
  *
+ * <h4>手动偏移量控制</h4>
+ *
+ * 除了依赖消费者定期提交已消费的偏移量外，用户还可以控制何时应将记录视为已消费，从而提交它们的偏移量。
+ * 当消息的消费与某些处理逻辑相关联时，这很有用，因此在完成处理之前，不应将消息视为已消费。
+ *
+ * <p>
+ * <pre>
+ *     Properties props = new Properties();
+ *     props.setProperty(&quot;bootstrap.servers&quot;, &quot;localhost:9092&quot;);
+ *     props.setProperty(&quot;group.id&quot;, &quot;test&quot;);
+ *     props.setProperty(&quot;enable.auto.commit&quot;, &quot;false&quot;);
+ *     props.setProperty(&quot;key.deserializer&quot;, &quot;org.apache.kafka.common.serialization.StringDeserializer&quot;);
+ *     props.setProperty(&quot;value.deserializer&quot;, &quot;org.apache.kafka.common.serialization.StringDeserializer&quot;);
+ *     KafkaConsumer&lt;String, String&gt; consumer = new KafkaConsumer&lt;&gt;(props);
+ *     consumer.subscribe(Arrays.asList(&quot;foo&quot;, &quot;bar&quot;));
+ *     final int minBatchSize = 200;
+ *     List&lt;ConsumerRecord&lt;String, String&gt;&gt; buffer = new ArrayList&lt;&gt;();
+ *     while (true) {
  * In this example we will consume a batch of records and batch them up in memory. When we have enough records
  * batched, we will insert them into a database. If we allowed offsets to auto commit as in the previous example, records
  * would be considered consumed after they were returned to the user in {@link #poll(Duration) poll}. It would then be
  * possible
  * for our process to fail after batching the records, but before they had been inserted into the database.
+ * 
+ * 在这个例子中，我们将消费一批记录并将它们批量存储在内存中。
+ * 当我们有足够多的记录批量处理时，我们将它们插入到数据库中。
+ * 如果我们像前面的例子那样允许偏移量自动提交，那么记录在通过 {@link #poll(Duration) poll} 返回给用户后就会被视为已消费。
+ * 这样，我们的进程可能在批量处理记录后但在将它们插入数据库之前失败。
+ *
  * <p>
  * To avoid this, we will manually commit the offsets only after the corresponding records have been inserted into the
  * database. This gives us exact control of when a record is considered consumed. This raises the opposite possibility:
@@ -278,16 +436,34 @@ import java.util.regex.Pattern;
  * would consume from last committed offset and would repeat the insert of the last batch of data. Used in this way
  * Kafka provides what is often called "at-least-once" delivery guarantees, as each record will likely be delivered one
  * time but in failure cases could be duplicated.
+ * 
+ * 为了避免这种情况，我们将只在相应的记录被插入到数据库之后才手动提交偏移量。
+ * 这使我们能够精确控制何时将记录视为已消费。
+ * 这引发了相反的可能性：进程可能在将数据插入数据库之后但在提交之前的间隔中失败（尽管这可能只是几毫秒的时间，但这是一种可能性）。
+ * 在这种情况下，接管消费的进程将从最后提交的偏移量开始消费，并重复插入最后一批数据。
+ * 以这种方式使用时，Kafka 提供了所谓的"至少一次"交付保证，因为每条记录很可能会被交付一次，但在失败的情况下可能会重复。
+ *
  * <p>
  * <b>Note: Using automatic offset commits can also give you "at-least-once" delivery, but the requirement is that
  * you must consume all data returned from each call to {@link #poll(Duration)} before any subsequent calls, or before
  * {@link #close() closing} the consumer. If you fail to do either of these, it is possible for the committed offset
  * to get ahead of the consumed position, which results in missing records. The advantage of using manual offset
  * control is that you have direct control over when a record is considered "consumed."</b>
+ * 
+ * <b>注意：使用自动偏移量提交也可以给你"至少一次"交付，
+ * 但要求是你必须在任何后续调用之前或在 {@link #close() 关闭} 消费者之前消费从每次 {@link #poll(Duration)} 调用返回的所有数据。
+ * 如果你未能做到这两点中的任何一个，提交的偏移量可能会超前于已消费的位置，从而导致丢失记录。
+ * 使用手动偏移量控制的优势在于你可以直接控制何时将记录视为"已消费"。</b>
+ *
  * <p>
  * The above example uses {@link #commitSync() commitSync} to mark all received records as committed. In some cases
  * you may wish to have even finer control over which records have been committed by specifying an offset explicitly.
  * In the example below we commit offset after we finish handling the records in each partition.
+ * 
+ * 上面的例子使用 {@link #commitSync() commitSync} 来标记所有接收到的记录为已提交。
+ * 在某些情况下，你可能希望通过明确指定偏移量来更精细地控制哪些记录已被提交。
+ * 在下面的例子中，我们在处理完每个分区中的记录后提交偏移量。
+ *
  * <p>
  * <pre>
  *     try {
@@ -309,12 +485,21 @@ import java.util.regex.Pattern;
  *
  * <b>Note: The committed offset should always be the offset of the next message that your application will read.</b>
  * Thus, when calling {@link #commitSync(Map) commitSync(offsets)} you should add one to the offset of the last message processed.
+ * 
+ * <b>注意：提交的偏移量应该始终是你的应用程序将要读取的下一条消息的偏移量。</b>
+ * 因此，当调用 {@link #commitSync(Map) commitSync(offsets)} 时，你应该将最后处理的消息的偏移量加一。
  *
  * <h4><a name="manualassignment">Manual Partition Assignment</a></h4>
+ * 
+ * <h4><a name="manualassignment">手动分区分配</a></h4>
  *
  * In the previous examples, we subscribed to the topics we were interested in and let Kafka dynamically assign a
  * fair share of the partitions for those topics based on the active consumers in the group. However, in
  * some cases you may need finer control over the specific partitions that are assigned. For example:
+ * 
+ * 在前面的例子中，我们订阅了我们感兴趣的主题，并让 Kafka 根据组中的活跃消费者动态分配这些主题的分区。
+ * 然而，在某些情况下，你可能需要对分配的特定分区进行更精细的控制。例如：
+ *
  * <p>
  * <ul>
  * <li>If the process is maintaining some kind of local state associated with that partition (like a
@@ -324,9 +509,19 @@ import java.util.regex.Pattern;
  * this case there is no need for Kafka to detect the failure and reassign the partition since the consuming process
  * will be restarted on another machine.
  * </ul>
+ * 
+ * <ul>
+ * <li>如果进程维护着与该分区相关的某种本地状态（如本地磁盘上的键值存储），那么它应该只获取它在磁盘上维护的分区的记录。
+ * <li>如果进程本身具有高可用性，并且在失败时会重新启动（可能使用像 YARN、Mesos 或 AWS 设施这样的集群管理框架，或作为流处理框架的一部分）。
+ *      在这种情况下，Kafka 不需要检测失败并重新分配分区，因为消费进程将在另一台机器上重新启动。
+ * </ul>
+ *
  * <p>
  * To use this mode, instead of subscribing to the topic using {@link #subscribe(Collection) subscribe}, you just call
  * {@link #assign(Collection)} with the full list of partitions that you want to consume.
+ * 
+ * 要使用这种模式，你不需要使用 {@link #subscribe(Collection) subscribe} 来订阅主题，而是直接调用 {@link #assign(Collection)}，
+ * 并传入你想要消费的完整分区列表。
  *
  * <pre>
  *     String topic = &quot;foo&quot;;
@@ -341,19 +536,39 @@ import java.util.regex.Pattern;
  * not use group coordination, so consumer failures will not cause assigned partitions to be rebalanced. Each consumer
  * acts independently even if it shares a groupId with another consumer. To avoid offset commit conflicts, you should
  * usually ensure that the groupId is unique for each consumer instance.
+ * 
+ * 一旦分配完成，你可以像前面的例子一样在循环中调用 {@link #poll(Duration) poll} 来消费记录。
+ * 消费者指定的组仍然用于提交偏移量，但现在分区集只会通过另一次调用 {@link #assign(Collection) assign} 来改变。
+ * 手动分区分配不使用组协调，所以消费者失败不会导致已分配的分区被重新平衡。每个消费者都独立行动，即使它与另一个消费者共享一个 groupId。
+ * 为了避免偏移量提交冲突，你通常应该确保每个消费者实例的 groupId 是唯一的。
+ *
  * <p>
  * Note that it isn't possible to mix manual partition assignment (i.e. using {@link #assign(Collection) assign})
  * with dynamic partition assignment through topic subscription (i.e. using {@link #subscribe(Collection) subscribe}).
+ * 
+ * 请注意，不可能将手动分区分配（即使用 {@link #assign(Collection) assign}）
+ * 与通过主题订阅的动态分区分配（即使用 {@link #subscribe(Collection) subscribe}）混合使用。
  *
  * <h4><a name="rebalancecallback">Storing Offsets Outside Kafka</h4>
+ * 
+ * <h4><a name="rebalancecallback">在 Kafka 外存储偏移量</h4>
  *
  * The consumer application need not use Kafka's built-in offset storage, it can store offsets in a store of its own
  * choosing. The primary use case for this is allowing the application to store both the offset and the results of the
  * consumption in the same system in a way that both the results and offsets are stored atomically. This is not always
  * possible, but when it is it will make the consumption fully atomic and give "exactly once" semantics that are
  * stronger than the default "at-least once" semantics you get with Kafka's offset commit functionality.
+ * 
+ * 消费者应用程序不必使用 Kafka 的内置偏移量存储，它可以将偏移量存储在自己选择的存储中。
+ * 这种做法的主要用例是允许应用程序以一种方式将偏移量和消费结果同时存储在同一个系统中，
+ * 使得结果和偏移量都能原子地存储。这并不总是可能的，但当它可行时，它将使消费完全原子化，
+ * 并提供比 Kafka 的偏移量提交功能默认的"至少一次"语义更强的"恰好一次"语义。
+ *
  * <p>
  * Here are a couple of examples of this type of usage:
+ * 
+ * 这里有几个这种用法的例子：
+ *
  * <ul>
  * <li>If the results of the consumption are being stored in a relational database, storing the offset in the database
  * as well can allow committing both the results and offset in a single transaction. Thus either the transaction will
@@ -366,13 +581,30 @@ import java.util.regex.Pattern;
  * This means that in this case the indexing process that comes back having lost recent updates just resumes indexing
  * from what it has ensuring that no updates are lost.
  * </ul>
+ * 
+ * <ul>
+ * <li>如果消费的结果被存储在关系数据库中，将偏移量也存储在数据库中可以允许在单个事务中同时提交结果和偏移量。
+ *  因此，要么事务成功，偏移量根据消费的内容更新，要么结果不会被存储，偏移量也不会更新。
+ * <li>如果结果被存储在本地存储中，也可能将偏移量存储在那里。例如，可以通过订阅特定分区并同时存储偏移量和索引数据来构建搜索索引。
+ *  如果这是以原子方式完成的，即使发生崩溃导致未同步的数据丢失，通常也可能使剩下的数据具有相应存储的偏移量。
+ *  这意味着在这种情况下，丢失了最近更新的索引进程恢复时，只需从它所拥有的内容继续索引，确保不会丢失任何更新。
+ * </ul>
+ *
  * <p>
  * Each record comes with its own offset, so to manage your own offset you just need to do the following:
+ * 
+ * 每条记录都有自己的偏移量，所以要管理你自己的偏移量，你只需要做以下几点：
  *
  * <ul>
  * <li>Configure <code>enable.auto.commit=false</code>
  * <li>Use the offset provided with each {@link ConsumerRecord} to save your position.
  * <li>On restart restore the position of the consumer using {@link #seek(TopicPartition, long)}.
+ * </ul>
+ * 
+ * <ul>
+ * <li>配置 <code>enable.auto.commit=false</code>
+ * <li>使用每个 {@link ConsumerRecord} 提供的偏移量来保存你的位置。
+ * <li>在重启时使用 {@link #seek(TopicPartition, long)} 恢复消费者的位置。
  * </ul>
  *
  * <p>
@@ -385,37 +617,75 @@ import java.util.regex.Pattern;
  * implementing {@link ConsumerRebalanceListener#onPartitionsRevoked(Collection)}. When partitions are assigned to a
  * consumer, the consumer will want to look up the offset for those new partitions and correctly initialize the consumer
  * to that position by implementing {@link ConsumerRebalanceListener#onPartitionsAssigned(Collection)}.
+ * 
+ * 当分区分配也是手动完成时（这在上面描述的搜索索引用例中可能会出现），这种类型的用法最简单。
+ * 如果分区分配是自动完成的，则需要特别注意处理分区分配变化的情况。
+ * 这可以通过在调用 {@link #subscribe(Collection, ConsumerRebalanceListener)} 和 
+ * {@link #subscribe(Pattern, ConsumerRebalanceListener)} 时提供一个 {@link ConsumerRebalanceListener} 实例来完成。
+ * 例如，当分区从消费者那里被收回时，消费者会想要通过实现 {@link ConsumerRebalanceListener#onPartitionsRevoked(Collection)} 来提交这些分区的偏移量。
+ * 当分区被分配给消费者时，消费者会想要查找这些新分区的偏移量，
+ * 并通过实现 {@link ConsumerRebalanceListener#onPartitionsAssigned(Collection)} 正确地将消费者初始化到该位置。
+ *
  * <p>
  * Another common use for {@link ConsumerRebalanceListener} is to flush any caches the application maintains for
  * partitions that are moved elsewhere.
+ * 
+ * {@link ConsumerRebalanceListener} 的另一个常见用途是刷新应用程序为被移动到其他地方的分区维护的任何缓存。
  *
  * <h4>Controlling The Consumer's Position</h4>
+ * 
+ * <h4>控制消费者的位置</h4>
  *
  * In most use cases the consumer will simply consume records from beginning to end, periodically committing its
  * position (either automatically or manually). However Kafka allows the consumer to manually control its position,
  * moving forward or backwards in a partition at will. This means a consumer can re-consume older records, or skip to
  * the most recent records without actually consuming the intermediate records.
+ * 
+ * 在大多数用例中，消费者将简单地从头到尾消费记录，定期提交其位置（自动或手动）。
+ * 然而，Kafka 允许消费者手动控制其位置，可以随意在分区中前进或后退。
+ * 这意味着消费者可以重新消费较旧的记录，或者跳到最新的记录而不实际消费中间的记录。
+ *
  * <p>
  * There are several instances where manually controlling the consumer's position can be useful.
+ * 
+ * 有几种情况下手动控制消费者的位置可能会很有用。
+ *
  * <p>
  * One case is for time-sensitive record processing it may make sense for a consumer that falls far enough behind to not
  * attempt to catch up processing all records, but rather just skip to the most recent records.
+ * 
+ * 一种情况是对于时间敏感的记录处理，对于落后太多的消费者来说，不尝试赶上处理所有记录，而是直接跳到最新的记录可能更有意义。
+ *
  * <p>
  * Another use case is for a system that maintains local state as described in the previous section. In such a system
  * the consumer will want to initialize its position on start-up to whatever is contained in the local store. Likewise
  * if the local state is destroyed (say because the disk is lost) the state may be recreated on a new machine by
  * re-consuming all the data and recreating the state (assuming that Kafka is retaining sufficient history).
+ * 
+ * 另一个用例是对于前一节描述的维护本地状态的系统。
+ * 在这样的系统中，消费者在启动时会希望将其位置初始化为本地存储中包含的内容。
+ * 同样，如果本地状态被销毁（比如因为磁盘丢失），可以通过重新消费所有数据并重新创建状态来在新机器上重建状态（假设 Kafka 保留了足够的历史记录）。
+ *
  * <p>
  * Kafka allows specifying the position using {@link #seek(TopicPartition, long)} to specify the new position. Special
  * methods for seeking to the earliest and latest offset the server maintains are also available (
  * {@link #seekToBeginning(Collection)} and {@link #seekToEnd(Collection)} respectively).
+ * 
+ * Kafka 允许使用 {@link #seek(TopicPartition, long)} 来指定新的位置。
+ * 还提供了寻找服务器维护的最早和最新偏移量的特殊方法（分别是 {@link #seekToBeginning(Collection)} 和 {@link #seekToEnd(Collection)}）。
  *
  * <h4>Consumption Flow Control</h4>
+ * 
+ * <h4>消费流控制</h4>
  *
  * If a consumer is assigned multiple partitions to fetch data from, it will try to consume from all of them at the same time,
  * effectively giving these partitions the same priority for consumption. However in some cases consumers may want to
  * first focus on fetching from some subset of the assigned partitions at full speed, and only start fetching other partitions
  * when these partitions have few or no data to consume.
+ * 
+ * 如果一个消费者被分配了多个分区来获取数据，它会尝试同时从所有分区消费，实际上给这些分区相同的消费优先级。
+ * 然而，在某些情况下，消费者可能希望首先专注于以全速从某些分配的分区子集获取数据，
+ * 只有当这些分区几乎没有或没有数据可消费时，才开始获取其他分区的数据。
  *
  * <p>
  * One of such cases is stream processing, where processor fetches from two topics and performs the join on these two streams.
@@ -423,31 +693,53 @@ import java.util.regex.Pattern;
  * in order to get the lagging stream to catch up. Another example is bootstraping upon consumer starting up where there are
  * a lot of history data to catch up, the applications usually want to get the latest data on some of the topics before consider
  * fetching other topics.
+ * 
+ * 这种情况之一是流处理，处理器从两个主题获取数据并对这两个流进行连接。
+ * 当其中一个主题远远落后于另一个时，处理器希望暂停从领先的主题获取数据，以便让落后的流赶上。
+ * 另一个例子是消费者启动时的引导过程，当有大量历史数据需要赶上时，应用程序通常希望在考虑获取其他主题之前先获取某些主题的最新数据。
  *
  * <p>
  * Kafka supports dynamic controlling of consumption flows by using {@link #pause(Collection)} and {@link #resume(Collection)}
  * to pause the consumption on the specified assigned partitions and resume the consumption
  * on the specified paused partitions respectively in the future {@link #poll(Duration)} calls.
+ * 
+ * Kafka 支持通过使用 {@link #pause(Collection)} 和 {@link #resume(Collection)} 来动态控制消费流，
+ * 分别用于在未来的 {@link #poll(Duration)} 调用中暂停指定已分配分区的消费和恢复指定已暂停分区的消费。
  *
  * <h3>Reading Transactional Messages</h3>
+ * 
+ * <h3>读取事务性消息</h3>
  *
  * <p>
  * Transactions were introduced in Kafka 0.11.0 wherein applications can write to multiple topics and partitions atomically.
  * In order for this to work, consumers reading from these partitions should be configured to only read committed data.
  * This can be achieved by setting the {@code isolation.level=read_committed} in the consumer's configuration.
+ * 
+ * 事务在 Kafka 0.11.0 中引入，应用程序可以原子地写入多个主题和分区。
+ * 为了使这个功能正常工作，从这些分区读取的消费者应该被配置为只读取已提交的数据。
+ * 这可以通过在消费者的配置中设置 {@code isolation.level=read_committed} 来实现。
  *
  * <p>
  * In <code>read_committed</code> mode, the consumer will read only those transactional messages which have been
  * successfully committed. It will continue to read non-transactional messages as before. There is no client-side
  * buffering in <code>read_committed</code> mode. Instead, the end offset of a partition for a <code>read_committed</code>
  * consumer would be the offset of the first message in the partition belonging to an open transaction. This offset
- * is known as the 'Last Stable Offset'(LSO).</p>
+ * is known as the 'Last Stable Offset'(LSO).
+ * 
+ * 在 <code>read_committed</code> 模式下，消费者将只读取那些已成功提交的事务性消息。
+ * 它将继续像以前一样读取非事务性消息。在 <code>read_committed</code> 模式下没有客户端缓冲。
+ * 相反，对于 <code>read_committed</code> 消费者来说，分区的结束偏移量将是属于一个开放事务的分区中第一条消息的偏移量。
+ * 这个偏移量被称为"最后稳定偏移量"（LSO）。
  *
  * <p>
  * A {@code read_committed} consumer will only read up to the LSO and filter out any transactional
  * messages which have been aborted. The LSO also affects the behavior of {@link #seekToEnd(Collection)} and
  * {@link #endOffsets(Collection)} for {@code read_committed} consumers, details of which are in each method's documentation.
  * Finally, the fetch lag metrics are also adjusted to be relative to the LSO for {@code read_committed} consumers.
+ * 
+ * {@code read_committed} 消费者将只读取到 LSO，并过滤掉任何已中止的事务性消息。
+ * LSO 还会影响 {@code read_committed} 消费者的 {@link #seekToEnd(Collection)} 和 {@link #endOffsets(Collection)} 的行为，
+ * 详细信息在每个方法的文档中。最后，对于 {@code read_committed} 消费者，获取滞后指标也会调整为相对于 LSO 的值。
  *
  * <p>
  * Partitions with transactional messages will include commit or abort markers which indicate the result of a transaction.
@@ -456,18 +748,33 @@ import java.util.regex.Pattern;
  * markers, and they are filtered out for consumers in both isolation levels. Additionally, applications using
  * {@code read_committed} consumers may also see gaps due to aborted transactions, since those messages would not
  * be returned by the consumer and yet would have valid offsets.
+ * 
+ * 包含事务性消息的分区将包括提交或中止标记，这些标记指示事务的结果。
+ * 这些标记不会返回给应用程序，但在日志中有一个偏移量。因此，从包含事务性消息的主题读取的应用程序将在消费的偏移量中看到间隙。
+ * 这些缺失的消息将是事务标记，它们在两种隔离级别的消费者中都被过滤掉。
+ * 此外，使用 {@code read_committed} 消费者的应用程序可能还会因为中止的事务而看到间隙，因为这些消息不会被消费者返回，但却有有效的偏移量。
  *
  * <h3><a name="multithreaded">Multi-threaded Processing</a></h3>
+ * 
+ * <h3><a name="multithreaded">多线程处理</a></h3>
  *
  * The Kafka consumer is NOT thread-safe. All network I/O happens in the thread of the application
  * making the call. It is the responsibility of the user to ensure that multi-threaded access
  * is properly synchronized. Un-synchronized access will result in {@link ConcurrentModificationException}.
+ * 
+ * Kafka 消费者不是线程安全的。
+ * 所有网络 I/O 都发生在进行调用的应用程序线程中。
+ * 用户有责任确保多线程访问得到适当的同步。未同步的访问将导致 {@link ConcurrentModificationException}。
  *
  * <p>
  * The only exception to this rule is {@link #wakeup()}, which can safely be used from an external thread to
  * interrupt an active operation. In this case, a {@link org.apache.kafka.common.errors.WakeupException} will be
  * thrown from the thread blocking on the operation. This can be used to shutdown the consumer from another thread.
  * The following snippet shows the typical pattern:
+ * 
+ * 这个规则的唯一例外是 {@link #wakeup()}，它可以安全地从外部线程使用来中断活动操作。
+ * 在这种情况下，一个 {@link org.apache.kafka.common.errors.WakeupException} 将从阻塞在操作上的线程中抛出。
+ * 这可以用于从另一个线程关闭消费者。以下代码片段展示了典型的模式：
  *
  * <pre>
  * public class KafkaConsumerRunner implements Runnable {
@@ -503,6 +810,8 @@ import java.util.regex.Pattern;
  * </pre>
  *
  * Then in a separate thread, the consumer can be shutdown by setting the closed flag and waking up the consumer.
+ * 
+ * 然后在一个单独的线程中，可以通过设置关闭标志并唤醒消费者来关闭消费者。
  *
  * <p>
  * <pre>
@@ -515,14 +824,24 @@ import java.util.regex.Pattern;
  * (in which case, {@link InterruptException} will be raised), we discourage their use since they may cause a clean
  * shutdown of the consumer to be aborted. Interrupts are mainly supported for those cases where using {@link #wakeup()}
  * is impossible, e.g. when a consumer thread is managed by code that is unaware of the Kafka client.
+ * 
+ * 请注意，虽然可以使用线程中断而不是 {@link #wakeup()} 来中止阻塞操作（在这种情况下，将引发 {@link InterruptException}），
+ * 但我们不鼓励使用它们，因为它们可能导致消费者的干净关闭被中止。
+ * 中断主要支持那些无法使用 {@link #wakeup()} 的情况，例如当消费者线程由不知道 Kafka 客户端的代码管理时。
  *
  * <p>
  * We have intentionally avoided implementing a particular threading model for processing. This leaves several
  * options for implementing multi-threaded processing of records.
+ * 
+ * 我们有意避免为处理实现特定的线程模型。这为实现记录的多线程处理留下了几个选项。
  *
  * <h4>1. One Consumer Per Thread</h4>
+ * 
+ * <h4>1. 每个线程一个消费者</h4>
  *
  * A simple option is to give each thread its own consumer instance. Here are the pros and cons of this approach:
+ * 
+ * 一个简单的选项是给每个线程自己的消费者实例。以下是这种方法的优缺点：
  * <ul>
  * <li><b>PRO</b>: It is the easiest to implement
  * <li><b>PRO</b>: It is often the fastest as no inter-thread co-ordination is needed
@@ -534,14 +853,30 @@ import java.util.regex.Pattern;
  * which can cause some drop in I/O throughput.
  * <li><b>CON</b>: The number of total threads across all processes will be limited by the total number of partitions.
  * </ul>
+ * 
+ * <ul>
+ * <li><b>优点</b>：最容易实现
+ * <li><b>优点</b>：通常是最快的，因为不需要线程间协调
+ * <li><b>优点</b>：使得在每个分区的基础上进行有序处理变得非常容易实现（每个线程只按接收顺序处理消息）
+ * <li><b>缺点</b>：更多的消费者意味着更多的 TCP 连接到集群（每个线程一个）。一般来说，Kafka 处理连接非常高效，所以这通常是一个小成本
+ * <li><b>缺点</b>：多个消费者意味着向服务器发送更多的请求，数据批处理略少，可能导致 I/O 吞吐量有所下降
+ * <li><b>缺点</b>：所有进程中的总线程数将受到分区总数的限制
+ * </ul>
  *
  * <h4>2. Decouple Consumption and Processing</h4>
+ * 
+ * <h4>2. 解耦消费和处理</h4>
  *
  * Another alternative is to have one or more consumer threads that do all data consumption and hands off
  * {@link ConsumerRecords} instances to a blocking queue consumed by a pool of processor threads that actually handle
  * the record processing.
+ * 
+ * 另一种选择是有一个或多个消费者线程进行所有数据消费，并将 {@link ConsumerRecords} 实例传递给一个阻塞队列，
+ * 由一组处理器线程池消费，这些线程实际处理记录。
  *
  * This option likewise has pros and cons:
+ * 
+ * 这个选项同样有优点和缺点：
  * <ul>
  * <li><b>PRO</b>: This option allows independently scaling the number of consumers and processors. This makes it
  * possible to have a single consumer that feeds many processor threads, avoiding any limitation on partitions.
@@ -551,49 +886,86 @@ import java.util.regex.Pattern;
  * <li><b>CON</b>: Manually committing the position becomes harder as it requires that all threads co-ordinate to ensure
  * that processing is complete for that partition.
  * </ul>
+ * 
+ * <ul>
+ * <li><b>优点</b>：这个选项允许独立地扩展消费者和处理器的数量。这使得可以有一个单一的消费者为多个处理器线程提供数据，避免了对分区的任何限制。
+ * <li><b>缺点</b>：保证处理器之间的顺序需要特别小心，因为线程将独立执行，较早的数据块实际上可能在较晚的数据块之后处理，这只是由于线程执行时间的运气。对于没有顺序要求的处理，这不是问题。
+ * <li><b>缺点</b>：手动提交位置变得更加困难，因为它要求所有线程协调以确保该分区的处理已完成。
+ * </ul>
  *
  * There are many possible variations on this approach. For example each processor thread can have its own queue, and
  * the consumer threads can hash into these queues using the TopicPartition to ensure in-order consumption and simplify
  * commit.
+ * 
+ * 这种方法有许多可能的变体。例如，每个处理器线程可以有自己的队列，
+ * 消费者线程可以使用 TopicPartition 对这些队列进行哈希，以确保有序消费并简化提交。
  */
 public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
+    // 客户端ID的度量标签
     private static final String CLIENT_ID_METRIC_TAG = "client-id";
+    // 表示当前没有线程访问KafkaConsumer的常量
     private static final long NO_CURRENT_THREAD = -1L;
+    // JMX前缀
     private static final String JMX_PREFIX = "kafka.consumer";
+    // 默认关闭超时时间（毫秒）
     static final long DEFAULT_CLOSE_TIMEOUT_MS = 30 * 1000;
 
-    // Visible for testing
+    // 可见性为测试使用
+    // 度量指标
     final Metrics metrics;
+    // Kafka消费者度量指标
     final KafkaConsumerMetrics kafkaConsumerMetrics;
 
+    // 日志记录器
     private Logger log;
+    // 客户端ID
     private final String clientId;
+    // 消费者组ID（可选）
     private final Optional<String> groupId;
+    // 消费者协调器
     private final ConsumerCoordinator coordinator;
+    // 键反序列化器
     private final Deserializer<K> keyDeserializer;
+    // 值反序列化器
     private final Deserializer<V> valueDeserializer;
+    // 数据获取器
     private final Fetcher<K, V> fetcher;
+    // 消费者拦截器
     private final ConsumerInterceptors<K, V> interceptors;
+    // 隔离级别
     private final IsolationLevel isolationLevel;
 
+    // 时间工具
     private final Time time;
+    // 消费者网络客户端
     private final ConsumerNetworkClient client;
+    // 订阅状态
     private final SubscriptionState subscriptions;
+    // 消费者元数据
     private final ConsumerMetadata metadata;
+    // 重试回退时间（毫秒）
     private final long retryBackoffMs;
+    // 请求超时时间（毫秒）
     private final long requestTimeoutMs;
+    // 默认API超时时间（毫秒）
     private final int defaultApiTimeoutMs;
+    // 消费者是否已关闭的标志
     private volatile boolean closed = false;
+    // 分区分配器列表
     private List<ConsumerPartitionAssignor> assignors;
 
     // currentThread holds the threadId of the current thread accessing KafkaConsumer
     // and is used to prevent multi-threaded access
+    // currentThread保存当前访问KafkaConsumer的线程ID
+    // 用于防止多线程访问
     private final AtomicLong currentThread = new AtomicLong(NO_CURRENT_THREAD);
     // refcount is used to allow reentrant access by the thread who has acquired currentThread
+    // refcount用于允许获取currentThread的线程进行重入访问
     private final AtomicInteger refcount = new AtomicInteger(0);
 
     // to keep from repeatedly scanning subscriptions in poll(), cache the result during metadata updates
+    // 为了避免在poll()中重复扫描订阅，在元数据更新期间缓存结果
     private boolean cachedSubscriptionHashAllFetchPositions;
 
     /**
