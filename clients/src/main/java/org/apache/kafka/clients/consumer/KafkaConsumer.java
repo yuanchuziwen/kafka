@@ -940,7 +940,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     private final Time time;
     // 消费者网络客户端
     private final ConsumerNetworkClient client;
-    // 订阅状态
+    // 订阅状态，这是一个非常重要的对象，它保存了消费者订阅的所有信息
     private final SubscriptionState subscriptions;
     // 消费者元数据
     private final ConsumerMetadata metadata;
@@ -1109,8 +1109,10 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
             // 从 consumerConfig 中确定 offsetResetStrategy（earliest、latest）
             OffsetResetStrategy offsetResetStrategy = OffsetResetStrategy.valueOf(config.getString(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG).toUpperCase(Locale.ROOT));
             this.subscriptions = new SubscriptionState(logContext, offsetResetStrategy);
+            // 针对所有实现了 ClusterResourceListener 接口的类，封装一个 ClusterResourceListeners 对象，传给 metadata 方便触发回调
             ClusterResourceListeners clusterResourceListeners = configureClusterResourceListeners(keyDeserializer,
                     valueDeserializer, metrics.reporters(), interceptorList);
+            // 封装一个 metadata 对象用于感知集群元数据的变化
             this.metadata = new ConsumerMetadata(retryBackoffMs,
                     config.getLong(ConsumerConfig.METADATA_MAX_AGE_CONFIG),
                     !config.getBoolean(ConsumerConfig.EXCLUDE_INTERNAL_TOPICS_CONFIG),
@@ -1119,15 +1121,18 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
             List<InetSocketAddress> addresses = ClientUtils.parseAndValidateAddresses(
                     config.getList(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG), config.getString(ConsumerConfig.CLIENT_DNS_LOOKUP_CONFIG));
             this.metadata.bootstrap(addresses);
-            String metricGrpPrefix = "consumer";
 
+            String metricGrpPrefix = "consumer";
             FetcherMetricsRegistry metricsRegistry = new FetcherMetricsRegistry(Collections.singleton(CLIENT_ID_METRIC_TAG), metricGrpPrefix);
-            ChannelBuilder channelBuilder = ClientUtils.createChannelBuilder(config, time, logContext);
+            // 确定隔离级别
             this.isolationLevel = IsolationLevel.valueOf(
                     config.getString(ConsumerConfig.ISOLATION_LEVEL_CONFIG).toUpperCase(Locale.ROOT));
             Sensor throttleTimeSensor = Fetcher.throttleTimeSensor(metrics, metricsRegistry);
+            // 确定心跳时间
             int heartbeatIntervalMs = config.getInt(ConsumerConfig.HEARTBEAT_INTERVAL_MS_CONFIG);
 
+            // 创建一个 networkClient 对象，然后再基于 networkClient 创建一个 ConsumerNetworkClient 对象
+            ChannelBuilder channelBuilder = ClientUtils.createChannelBuilder(config, time, logContext);
             ApiVersions apiVersions = new ApiVersions();
             NetworkClient netClient = new NetworkClient(
                     new Selector(config.getLong(ConsumerConfig.CONNECTIONS_MAX_IDLE_MS_CONFIG), metrics, time, metricGrpPrefix, channelBuilder, logContext),
@@ -1155,12 +1160,14 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                     config.getInt(ConsumerConfig.REQUEST_TIMEOUT_MS_CONFIG),
                     heartbeatIntervalMs); //Will avoid blocking an extended period of time to prevent heartbeat thread starvation
 
+            // 根据配置创建分区分配器列表，最终会由 ConsumerCoordinator 选择一个分区分配器
             this.assignors = ConsumerPartitionAssignor.getAssignorInstances(
                     config.getList(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG),
                     config.originals(Collections.singletonMap(ConsumerConfig.CLIENT_ID_CONFIG, clientId))
             );
 
             // no coordinator will be constructed for the default (null) group id
+            // 如果 group.id 为空，则不会构造协调器
             this.coordinator = !groupId.isPresent() ? null :
                 new ConsumerCoordinator(groupRebalanceConfig,
                         logContext,
@@ -1175,6 +1182,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                         config.getInt(ConsumerConfig.AUTO_COMMIT_INTERVAL_MS_CONFIG),
                         this.interceptors,
                         config.getBoolean(ConsumerConfig.THROW_ON_FETCH_STABLE_OFFSET_UNSUPPORTED));
+            // 创建一个 Fetcher 对象，用于从 Kafka 服务器获取数据
             this.fetcher = new Fetcher<>(
                     logContext,
                     this.client,
@@ -1274,6 +1282,11 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * were assigned. If topic subscription was used, then this will give the set of topic partitions currently assigned
      * to the consumer (which may be none if the assignment hasn't happened yet, or the partitions are in the
      * process of getting reassigned).
+     * <p>
+     * 获取当前分配给此消费者的分区集。
+     * 如果通过直接分配分区使用 {@link #assign(Collection)} 订阅，则此方法将简单地返回分配的相同分区。
+     * 如果使用主题订阅，则此方法将返回当前分配给消费者的主题分区集（可能为空，如果分配尚未发生，或者分区正在重新分配过程中）。
+     *
      * @return The set of partitions currently assigned to this consumer
      */
     public Set<TopicPartition> assignment() {
@@ -1288,7 +1301,12 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     /**
      * Get the current subscription. Will return the same topics used in the most recent call to
      * {@link #subscribe(Collection, ConsumerRebalanceListener)}, or an empty set if no such call has been made.
-     * @return The set of topics currently subscribed to
+     * <p>
+     * 获取当前订阅的主题集。
+     * 将返回最近一次调用 {@link #subscribe(Collection, ConsumerRebalanceListener)} 时使用的相同主题集，
+     * 如果没有这样的调用，则返回一个空集。
+     *
+     * @return 当前订阅的主题集
      */
     public Set<String> subscription() {
         acquireAndEnsureOpen();
@@ -1304,8 +1322,14 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * assigned partitions. <b>Topic subscriptions are not incremental. This list will replace the current
      * assignment (if there is one).</b> Note that it is not possible to combine topic subscription with group management
      * with manual partition assignment through {@link #assign(Collection)}.
+     * <p>
+     * 订阅给定主题列表以获取动态分配的分区。
+     * <b>主题订阅不是增量式的。此列表将替换当前分配（如果存在）。</b>
+     * 注意，不能同时使用 topic subscription 和 partition assignment。
      *
      * If the given list of topics is empty, it is treated the same as {@link #unsubscribe()}.
+     * <p>
+     * 如果给定的主题列表为空，则将其视为与 {@link #unsubscribe()} 相同。
      *
      * <p>
      * As part of group management, the consumer will keep track of the list of consumers that belong to a particular
@@ -1316,15 +1340,33 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * <li>An existing member of the consumer group is shutdown or fails
      * <li>A new member is added to the consumer group
      * </ul>
+     * 
+     * <p>
+     * 作为组管理的一部分，消费者将跟踪属于特定组的所有消费者的列表，
+     * 如果触发以下任何事件之一，将触发重新平衡操作：
+     * <ul>
+     * <li>任何订阅主题的分区数量发生变化
+     * <li>订阅的主题被创建或删除
+     * <li>消费者组中的现有成员关闭或失败
+     * <li>消费者组中新成员的添加
+     * </ul>
+     *
      * <p>
      * When any of these events are triggered, the provided listener will be invoked first to indicate that
      * the consumer's assignment has been revoked, and then again when the new assignment has been received.
      * Note that rebalances will only occur during an active call to {@link #poll(Duration)}, so callbacks will
      * also only be invoked during that time.
+     * <p>
+     * 当触发这些事件之一时，提供的监听器将首先被调用，以指示消费者的分配已被撤销，然后再次在接收到新分配时被调用。
+     * 请注意，重新平衡仅在调用 {@link #poll(Duration)} 期间发生，因此回调也仅在此期间调用。
      *
      * The provided listener will immediately override any listener set in a previous call to subscribe.
      * It is guaranteed, however, that the partitions revoked/assigned through this interface are from topics
      * subscribed in this call. See {@link ConsumerRebalanceListener} for more details.
+     * <p>
+     * 提供的监听器将立即覆盖任何在之前调用 subscribe 时设置的监听器。
+     * 然而，可以保证通过此接口撤销/分配的分区是从在此调用中订阅的主题派生的。
+     * 请参阅 {@link ConsumerRebalanceListener} 了解更多详细信息。
      *
      * @param topics The list of topics to subscribe to
      * @param listener Non-null listener instance to get notifications on partition assignment/revocation for the
@@ -1338,21 +1380,26 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     public void subscribe(Collection<String> topics, ConsumerRebalanceListener listener) {
         acquireAndEnsureOpen();
         try {
+            // 如果 group.id 为空，则抛出异常
             maybeThrowInvalidGroupIdException();
             if (topics == null)
                 throw new IllegalArgumentException("Topic collection to subscribe to cannot be null");
             if (topics.isEmpty()) {
                 // treat subscribing to empty topic list as the same as unsubscribing
+                // 将订阅空主题列表视为与取消订阅相同
                 this.unsubscribe();
             } else {
+                // 遍历主题列表，如果主题为空，则抛出异常
                 for (String topic : topics) {
                     if (Utils.isBlank(topic))
                         throw new IllegalArgumentException("Topic collection to subscribe to cannot contain null or empty topic");
                 }
-
+                // 如果没有配置分区分配器，则抛出异常
                 throwIfNoAssignorsConfigured();
+                // 清除未分配主题的缓冲数据
                 fetcher.clearBufferedDataForUnassignedTopics(topics);
                 log.info("Subscribed to topic(s): {}", Utils.join(topics, ", "));
+                // 订阅主题，并更新元数据
                 if (this.subscriptions.subscribe(new HashSet<>(topics), listener))
                     metadata.requestUpdateForNewTopics();
             }
@@ -1384,6 +1431,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      */
     @Override
     public void subscribe(Collection<String> topics) {
+        // 传递一个空操作的 rebalance listener
         subscribe(topics, new NoOpConsumerRebalanceListener());
     }
 
@@ -1393,10 +1441,18 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * This can be controlled through the {@code metadata.max.age.ms} configuration: by lowering
      * the max metadata age, the consumer will refresh metadata more often and check for matching topics.
      * <p>
+     * 订阅与给定模式匹配的所有主题，以获取动态分配的分区。
+     * 模式匹配将定期与所有存在的主题进行匹配。
+     * 这可以通过 {@code metadata.max.age.ms} 配置进行控制：通过降低最大元数据年龄，消费者会更频繁地刷新元数据并检查匹配的主题。
+     * <p>
      * See {@link #subscribe(Collection, ConsumerRebalanceListener)} for details on the
      * use of the {@link ConsumerRebalanceListener}. Generally rebalances are triggered when there
      * is a change to the topics matching the provided pattern and when consumer group membership changes.
      * Group rebalances only take place during an active call to {@link #poll(Duration)}.
+     * <p>
+     * 请参阅 {@link #subscribe(Collection, ConsumerRebalanceListener)} 了解有关 {@link ConsumerRebalanceListener} 使用的详细信息。
+     * 一般情况下，重新平衡仅在匹配提供的模式的主题发生变化和消费者组成员发生变化时触发。
+     * 仅在调用 {@link #poll(Duration)} 期间发生重新平衡。
      *
      * @param pattern Pattern to subscribe to
      * @param listener Non-null listener instance to get notifications on partition assignment/revocation for the
@@ -1408,17 +1464,23 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      */
     @Override
     public void subscribe(Pattern pattern, ConsumerRebalanceListener listener) {
+        // 如果 group.id 为空，则抛出异常
         maybeThrowInvalidGroupIdException();
+        // 如果 pattern 为空，则抛出异常
         if (pattern == null || pattern.toString().equals(""))
             throw new IllegalArgumentException("Topic pattern to subscribe to cannot be " + (pattern == null ?
                     "null" : "empty"));
 
         acquireAndEnsureOpen();
         try {
+            // 如果没有配置 partition asignor，则抛出异常
             throwIfNoAssignorsConfigured();
             log.info("Subscribed to pattern: '{}'", pattern);
+            // subscribe pattern
             this.subscriptions.subscribe(pattern, listener);
+            // 交给 group coordinator 来根据 pattern 订阅对应匹配的 topics
             this.coordinator.updatePatternSubscription(metadata.fetch());
+            // 更新元数据
             this.metadata.requestUpdateForNewTopics();
         } finally {
             release();
@@ -1443,23 +1505,30 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      */
     @Override
     public void subscribe(Pattern pattern) {
+        // 传递一个空操作的 rebalance listener
         subscribe(pattern, new NoOpConsumerRebalanceListener());
     }
 
     /**
      * Unsubscribe from topics currently subscribed with {@link #subscribe(Collection)} or {@link #subscribe(Pattern)}.
      * This also clears any partitions directly assigned through {@link #assign(Collection)}.
+     * <p>
+     * 取消订阅当前通过 {@link #subscribe(Collection)} 或 {@link #subscribe(Pattern)} 订阅的主题。
+     * 这也将清除任何通过 {@link #assign(Collection)} 直接分配的分区。
      *
      * @throws org.apache.kafka.common.KafkaException for any other unrecoverable errors (e.g. rebalance callback errors)
      */
     public void unsubscribe() {
         acquireAndEnsureOpen();
         try {
+            // 清除未分配分区的缓冲数据
             fetcher.clearBufferedDataForUnassignedPartitions(Collections.emptySet());
+            // 如果 coordinator 不为空，则离开组
             if (this.coordinator != null) {
                 this.coordinator.onLeavePrepare();
                 this.coordinator.maybeLeaveGroup("the consumer unsubscribed from all topics");
             }
+            // 取消订阅
             this.subscriptions.unsubscribe();
             log.info("Unsubscribed all topics or patterns and assigned partitions");
         } finally {
@@ -2831,10 +2900,15 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
     /**
      * Acquire the light lock and ensure that the consumer hasn't been closed.
+     * <p>
+     * 获取轻量锁并确保消费者未关闭。
+     * 
      * @throws IllegalStateException If the consumer has been closed
      */
     private void acquireAndEnsureOpen() {
+        // 获取轻量锁
         acquire();
+        // 如果消费者已关闭，释放锁并抛出异常
         if (this.closed) {
             release();
             throw new IllegalStateException("This consumer has already been closed.");
@@ -2845,6 +2919,10 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * Acquire the light lock protecting this consumer from multi-threaded access. Instead of blocking
      * when the lock is not available, however, we just throw an exception (since multi-threaded usage is not
      * supported).
+     * <p>
+     * 获取轻量锁保护此消费者免受多线程访问。
+     * 当锁不可用时，不会阻塞，而是抛出异常（因为不支持多线程访问）。
+     * 
      * @throws ConcurrentModificationException if another thread already has the lock
      */
     private void acquire() {

@@ -936,6 +936,9 @@ public abstract class AbstractCoordinator implements Closeable {
      * Get the current generation state, regardless of whether it is currently stable.
      * Note that the generation information can be updated while we are still in the middle
      * of a rebalance, after the join-group response is received.
+     * <p>
+     * 获取当前的 generation 状态，无论它是否稳定。
+     * 注意，generation 信息可以在我们仍在进行 rebalance 的过程中更新，在收到 join-group 响应之后。
      *
      * @return the current generation
      */

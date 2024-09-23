@@ -90,18 +90,23 @@ public class SubscriptionState {
     /* the partitions that are currently assigned, note that the order of partition matters (see FetchBuilder for more details) */
     /* 当前分配的分区，注意分区的顺序很重要（详见 FetchBuilder） */
     private final PartitionStates<TopicPartitionState> assignment;
+
     /* Default offset reset strategy */
     /* 默认的偏移量重置策略 */
     private final OffsetResetStrategy defaultResetStrategy;
+
     /* the type of subscription */
     /* 订阅类型 */
     private SubscriptionType subscriptionType;
+
     /* the pattern user has requested */
     /* 用户请求的模式 */
     private Pattern subscribedPattern;
+
     /* the list of topics the user has requested */
     /* 用户请求的主题列表 */
     private Set<String> subscription;
+
     /* The list of topics the group has subscribed to. This may include some topics which are not part
      * of `subscription` for the leader of a group since it is responsible for detecting metadata changes
      * which require a group rebalance. */
@@ -109,9 +114,11 @@ public class SubscriptionState {
     对于 group leader，这可能包括一些不属于 `subscription` 的主题，
     因为它负责检测需要组再平衡的 metadata 更新。 */
     private Set<String> groupSubscription;
+
     /* User-provided listener to be invoked when assignment changes */
     /* 用户提供的在分配更改时调用的 listener */
     private ConsumerRebalanceListener rebalanceListener;
+
     /* 分配 ID */
     private int assignmentId = 0;
 

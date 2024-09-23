@@ -234,6 +234,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     }
 
     public void updatePatternSubscription(Cluster cluster) {
+        // 遍历所有的 topic，过滤出匹配订阅 pattern 的 topic 集合
         final Set<String> topicsToSubscribe = cluster.topics().stream()
                 .filter(subscriptions::matchesSubscribedPattern)
                 .collect(Collectors.toSet());
@@ -757,27 +758,37 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         }
     }
 
+    /**
+     * 在 consumer 离开 consumer group 之前准备
+     */
     @Override
     public void onLeavePrepare() {
         // Save the current Generation and use that to get the memberId, as the hb thread can change it at any time
+        // 保存当前的 Generation 并使用它来获取 memberId，因为 hb 线程可以随时更改它
         final Generation currentGeneration = generation();
         final String memberId = currentGeneration.memberId;
 
         log.debug("Executing onLeavePrepare with generation {} and memberId {}", currentGeneration, memberId);
 
         // we should reset assignment and trigger the callback before leaving group
+        // 在离开 group 之前，我们应该重置 assignment 并触发回调
         Set<TopicPartition> droppedPartitions = new HashSet<>(subscriptions.assignedPartitions());
 
+        // 如果 consumer 有自动分配的分区，并且 droppedPartitions 不为空，则触发回调
         if (subscriptions.hasAutoAssignedPartitions() && !droppedPartitions.isEmpty()) {
             final Exception e;
+            // 如果 generation 为 NO_GENERATION 或者 rebalanceInProgress() 为 true，则触发 partitionsLost 回调
             if (generation() == Generation.NO_GENERATION || rebalanceInProgress()) {
                 e = invokePartitionsLost(droppedPartitions);
             } else {
+                // 否则，触发 partitionsRevoked 回调
                 e = invokePartitionsRevoked(droppedPartitions);
             }
 
+            // 重置 subscription
             subscriptions.assignFromSubscribed(Collections.emptySet());
 
+            // 如果回调抛出异常，则抛出 KafkaException
             if (e != null) {
                 throw new KafkaException("User rebalance callback throws an error", e);
             }
