@@ -902,7 +902,7 @@ import java.util.regex.Pattern;
  */
 public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
-    // 客户端ID的度量标签
+    // 客户端 ID 的度量标签
     private static final String CLIENT_ID_METRIC_TAG = "client-id";
     // 表示当前没有线程访问KafkaConsumer的常量
     private static final long NO_CURRENT_THREAD = -1L;
@@ -919,15 +919,15 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
     // 日志记录器
     private Logger log;
-    // 客户端ID
+    // 客户端 ID
     private final String clientId;
-    // 消费者组ID（可选）
+    // 消费者组 ID（可选）
     private final Optional<String> groupId;
     // 消费者协调器
     private final ConsumerCoordinator coordinator;
-    // 键反序列化器
+    // key 反序列化器
     private final Deserializer<K> keyDeserializer;
-    // 值反序列化器
+    // value 反序列化器
     private final Deserializer<V> valueDeserializer;
     // 数据获取器
     private final Fetcher<K, V> fetcher;
@@ -957,15 +957,15 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
     // currentThread holds the threadId of the current thread accessing KafkaConsumer
     // and is used to prevent multi-threaded access
-    // currentThread保存当前访问KafkaConsumer的线程ID
+    // currentThread 保存当前访问 KafkaConsumer 的线程 ID
     // 用于防止多线程访问
     private final AtomicLong currentThread = new AtomicLong(NO_CURRENT_THREAD);
     // refcount is used to allow reentrant access by the thread who has acquired currentThread
-    // refcount用于允许获取currentThread的线程进行重入访问
+    // refcount 用于允许获取 currentThread 的线程进行重入访问
     private final AtomicInteger refcount = new AtomicInteger(0);
 
     // to keep from repeatedly scanning subscriptions in poll(), cache the result during metadata updates
-    // 为了避免在poll()中重复扫描订阅，在元数据更新期间缓存结果
+    // 为了避免在 poll() 中重复扫描订阅，在元数据更新期间缓存结果
     private boolean cachedSubscriptionHashAllFetchPositions;
 
     /**
@@ -974,9 +974,17 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * either strings or objects of the appropriate type (for example a numeric configuration would accept either the
      * string "42" or the integer 42).
      * <p>
+     *     通过提供一组键值对作为配置来实例化消费者。
+     *     有效的配置字符串在 <a href="http://kafka.apache.org/documentation.html#consumerconfigs" >这里</a> 中有文档。
+     *     值可以是字符串，也可以是适当类型的对象（例如，数值配置可以接受字符串 "42" 或整数 42）。
+     *     <p>
      * Valid configuration strings are documented at {@link ConsumerConfig}.
      * <p>
+     *     有效的配置字符串在 {@link ConsumerConfig} 中有文档。
+     *     <p>
      * Note: after creating a {@code KafkaConsumer} you must always {@link #close()} it to avoid resource leaks.
+     * <p>
+     *     注意：创建 {@code KafkaConsumer} 后，必须始终 {@link #close()} 它以避免资源泄漏。
      *
      * @param configs The consumer configs
      */
@@ -1040,6 +1048,8 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     @SuppressWarnings("unchecked")
     KafkaConsumer(ConsumerConfig config, Deserializer<K> keyDeserializer, Deserializer<V> valueDeserializer) {
         try {
+            // 创建 GroupRebalanceConfig 对象，用于配置消费者组 rebalance 配置
+            // GroupRebalanceConfig 会从 ConsumerConfig 中抽取一些它需要的配置
             GroupRebalanceConfig groupRebalanceConfig = new GroupRebalanceConfig(config,
                     GroupRebalanceConfig.ProtocolType.CONSUMER);
 
@@ -1049,6 +1059,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
             LogContext logContext;
 
             // If group.instance.id is set, we will append it to the log context.
+            // 创建 LogContext 对象，用于记录日志
             if (groupRebalanceConfig.groupInstanceId.isPresent()) {
                 logContext = new LogContext("[Consumer instanceId=" + groupRebalanceConfig.groupInstanceId.get() +
                         ", clientId=" + clientId + ", groupId=" + groupId.orElse("null") + "] ");
@@ -1057,7 +1068,9 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
             }
 
             this.log = logContext.logger(getClass());
+            // 是否启用自动提交
             boolean enableAutoCommit = config.maybeOverrideEnableAutoCommit();
+            // 如果 group.id 为空，则记录警告
             groupId.ifPresent(groupIdStr -> {
                 if (groupIdStr.isEmpty()) {
                     log.warn("Support for using the empty group id by consumers is deprecated and will be removed in the next major release.");
@@ -1071,11 +1084,14 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
             this.metrics = buildMetrics(config, time, clientId);
             this.retryBackoffMs = config.getLong(ConsumerConfig.RETRY_BACKOFF_MS_CONFIG);
 
+            // 从 consumerConfig 中加载所有的拦截器
             List<ConsumerInterceptor<K, V>> interceptorList = (List) config.getConfiguredInstances(
                     ConsumerConfig.INTERCEPTOR_CLASSES_CONFIG,
                     ConsumerInterceptor.class,
                     Collections.singletonMap(ConsumerConfig.CLIENT_ID_CONFIG, clientId));
+            // 将所有的拦截器封装成 ConsumerInterceptors 对象，方便触发回调
             this.interceptors = new ConsumerInterceptors<>(interceptorList);
+            // 实例化 keyDeserializer 和 valueDeserializer
             if (keyDeserializer == null) {
                 this.keyDeserializer = config.getConfiguredInstance(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, Deserializer.class);
                 this.keyDeserializer.configure(config.originals(Collections.singletonMap(ConsumerConfig.CLIENT_ID_CONFIG, clientId)), true);
@@ -1090,6 +1106,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                 config.ignore(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG);
                 this.valueDeserializer = valueDeserializer;
             }
+            // 从 consumerConfig 中确定 offsetResetStrategy（earliest、latest）
             OffsetResetStrategy offsetResetStrategy = OffsetResetStrategy.valueOf(config.getString(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG).toUpperCase(Locale.ROOT));
             this.subscriptions = new SubscriptionState(logContext, offsetResetStrategy);
             ClusterResourceListeners clusterResourceListeners = configureClusterResourceListeners(keyDeserializer,

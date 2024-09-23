@@ -49,12 +49,17 @@ import static org.apache.kafka.common.config.ConfigDef.ValidString.in;
 
 /**
  * The consumer configuration keys
+ * <p>
+ *     consumer 配置
  */
 public class ConsumerConfig extends AbstractConfig {
     private static final ConfigDef CONFIG;
 
     // a list contains all the assignor names that only assign subscribed topics to consumer. Should be updated when new assignor added.
     // This is to help optimize ConsumerCoordinator#performAssignment method
+    // 一个列表，包含所有仅将订阅主题分配给消费者的 assignor 名称。
+    // 当添加新的 assignor 时，应更新此列表。
+    // 这是为了帮助优化 ConsumerCoordinator#performAssignment 方法
     public static final List<String> ASSIGN_FROM_SUBSCRIBED_ASSIGNORS =
         Collections.unmodifiableList(Arrays.asList(
             RANGE_ASSIGNOR_NAME,
@@ -586,6 +591,7 @@ public class ConsumerConfig extends AbstractConfig {
 
     private void maybeOverrideClientId(Map<String, Object> configs) {
         final String clientId = this.getString(CLIENT_ID_CONFIG);
+        // 如果没配置 client.id，则根据 group.id 和 group.instance.id 生成一个
         if (clientId == null || clientId.isEmpty()) {
             final String groupId = this.getString(GROUP_ID_CONFIG);
             String groupInstanceId = this.getString(GROUP_INSTANCE_ID_CONFIG);
@@ -601,6 +607,7 @@ public class ConsumerConfig extends AbstractConfig {
     protected static Map<String, Object> appendDeserializerToConfig(Map<String, Object> configs,
                                                                     Deserializer<?> keyDeserializer,
                                                                     Deserializer<?> valueDeserializer) {
+        // 做法和 ProducerConfig 一样，将 keyDeserializer 和 valueDeserializer 的类名放入配置中
         Map<String, Object> newConfigs = new HashMap<>(configs);
         if (keyDeserializer != null)
             newConfigs.put(KEY_DESERIALIZER_CLASS_CONFIG, keyDeserializer.getClass());

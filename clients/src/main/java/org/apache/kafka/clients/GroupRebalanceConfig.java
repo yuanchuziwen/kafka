@@ -49,16 +49,19 @@ public class GroupRebalanceConfig {
         this.sessionTimeoutMs = config.getInt(CommonClientConfigs.SESSION_TIMEOUT_MS_CONFIG);
 
         // Consumer and Connect use different config names for defining rebalance timeout
+        // consumer 和 connect 使用不同的配置名称来获取 rebalance 的超时时间
         if (protocolType == ProtocolType.CONSUMER) {
             this.rebalanceTimeoutMs = config.getInt(CommonClientConfigs.MAX_POLL_INTERVAL_MS_CONFIG);
         } else {
             this.rebalanceTimeoutMs = config.getInt(CommonClientConfigs.REBALANCE_TIMEOUT_MS_CONFIG);
         }
 
+        // 心跳间隔
         this.heartbeatIntervalMs = config.getInt(CommonClientConfigs.HEARTBEAT_INTERVAL_MS_CONFIG);
         this.groupId = config.getString(CommonClientConfigs.GROUP_ID_CONFIG);
 
         // Static membership is only introduced in consumer API.
+        // 静态成员只在消费者 API 中引入
         if (protocolType == ProtocolType.CONSUMER) {
             String groupInstanceId = config.getString(CommonClientConfigs.GROUP_INSTANCE_ID_CONFIG);
             if (groupInstanceId != null) {
@@ -74,6 +77,7 @@ public class GroupRebalanceConfig {
         this.retryBackoffMs = config.getLong(CommonClientConfigs.RETRY_BACKOFF_MS_CONFIG);
 
         // Internal leave group config is only defined in Consumer.
+        // 内部离开组配置仅在消费者中定义
         if (protocolType == ProtocolType.CONSUMER) {
             this.leaveGroupOnClose = config.getBoolean("internal.leave.group.on.close");
         } else {
