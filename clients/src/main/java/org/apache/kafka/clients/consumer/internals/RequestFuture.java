@@ -194,6 +194,9 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
 
     /**
      * Convert from a request future of one type to another type
+     * <p>
+     *     将一个类型的请求 future 转换为另一个类型
+     *
      * @param adapter The adapter which does the conversion
      * @param <S> The type of the future adapted to
      * @return The new future

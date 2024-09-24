@@ -102,6 +102,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
     // this collection must be thread-safe because it is modified from the response handler
     // of offset commit requests, which may be invoked from the heartbeat thread
+    // 这个集合必须线程安全，因为它的修改可能来自心跳线程的 offset commit 请求响应处理程序
     private final ConcurrentLinkedQueue<OffsetCommitCompletion> completedOffsetCommits;
 
     private boolean isLeader = false;
@@ -233,11 +234,16 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         return protocolSet;
     }
 
+    /**
+     * 更新 pattern 订阅
+     * @param cluster
+     */
     public void updatePatternSubscription(Cluster cluster) {
         // 遍历所有的 topic，过滤出匹配订阅 pattern 的 topic 集合
         final Set<String> topicsToSubscribe = cluster.topics().stream()
                 .filter(subscriptions::matchesSubscribedPattern)
                 .collect(Collectors.toSet());
+        // 更新订阅
         if (subscriptions.subscribeFromPattern(topicsToSubscribe))
             metadata.requestUpdateForNewTopics();
     }
@@ -443,15 +449,18 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     }
 
     void maybeUpdateSubscriptionMetadata() {
+        
         int version = metadata.updateVersion();
         if (version > metadataSnapshot.version) {
             Cluster cluster = metadata.fetch();
 
+            // 如果订阅了 pattern，则更新 pattern 订阅
             if (subscriptions.hasPatternSubscription())
                 updatePatternSubscription(cluster);
 
             // Update the current snapshot, which will be used to check for subscription
             // changes that would require a rebalance (e.g. new partitions).
+            // 更新当前的订阅元数据快照，它将被用于检查订阅变化，从而触发 rebalance（例如新分区）。
             metadataSnapshot = new MetadataSnapshot(subscriptions, cluster, version);
         }
     }
@@ -461,7 +470,14 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
      * has joined the group (if it is using group management). This also handles periodic offset commits
      * if they are enabled.
      * <p>
+     * 轮询获取 coordinator 事件。
+     * 这确保了 coordinator 是已知的，并且消费者已经加入了组（如果它使用组管理）。
+     * 这也处理了定期偏移提交（如果启用）。
+     * <p>
      * Returns early if the timeout expires or if waiting on rejoin is not required
+     * <p>
+     * 如果超时或不需要等待重新加入组，则返回早。
+     * <p>
      *
      * @param timer Timer bounding how long this method can block
      * @param waitForJoinGroup Boolean flag indicating if we should wait until re-join group completes
@@ -469,10 +485,12 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
      * @return true iff the operation succeeded
      */
     public boolean poll(Timer timer, boolean waitForJoinGroup) {
+        // 更新订阅元数据（会触发 pattern 模式订阅的 topic 更新）
         maybeUpdateSubscriptionMetadata();
-
+        // 执行已完成的偏移提交回调
         invokeCompletedOffsetCommitCallbacks();
 
+        // 如果存在自动分配的分区
         if (subscriptions.hasAutoAssignedPartitions()) {
             if (protocol == null) {
                 throw new IllegalStateException("User configured " + ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG +
@@ -480,6 +498,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             }
             // Always update the heartbeat last poll time so that the heartbeat thread does not leave the
             // group proactively due to application inactivity even if (say) the coordinator cannot be found.
+            // 始终更新心跳的最后轮询时间，以便即使（例如）找不到协调器，心跳线程也不会由于应用程序不活动而主动离开组。
             pollHeartbeat(timer.currentTimeMs());
             if (coordinatorUnknown() && !ensureCoordinatorReady(timer)) {
                 return false;
@@ -489,6 +508,8 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 // due to a race condition between the initial metadata fetch and the initial rebalance,
                 // we need to ensure that the metadata is fresh before joining initially. This ensures
                 // that we have matched the pattern against the cluster's topics at least once before joining.
+                // 由于初始元数据获取和初始重新平衡之间的竞争条件，我们需要确保在最初加入之前元数据是最新的。
+                // 这确保我们在加入之前至少一次将模式与集群的主题匹配。
                 if (subscriptions.hasPatternSubscription()) {
                     // For consumer group that uses pattern-based subscription, after a topic is created,
                     // any consumer that discovers the topic after metadata refresh can trigger rebalance
@@ -497,6 +518,11 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                     // reduce the number of rebalances caused by single topic creation by asking consumer to
                     // refresh metadata before re-joining the group as long as the refresh backoff time has
                     // passed.
+                    // 对于使用基于模式订阅的消费者组，在创建主题后，
+                    // 任何在元数据刷新后发现该主题的消费者都可以触发整个消费者组的重新平衡。
+                    // 如果消费者在非常不同的时间刷新元数据，则在创建一个主题后可以触发多次重新平衡。
+                    // 通过要求消费者在重新加入组之前刷新元数据，只要刷新退避时间已过，
+                    // 我们可以显著减少由单个主题创建引起的重新平衡次数。
                     if (this.metadata.timeToAllowUpdate(timer.currentTimeMs()) == 0) {
                         this.metadata.requestUpdate();
                     }
@@ -509,9 +535,11 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 }
 
                 // if not wait for join group, we would just use a timer of 0
+                // 如果不等待加入组，我们将只使用 0 的计时器
                 if (!ensureActiveGroup(waitForJoinGroup ? timer : time.timer(0L))) {
                     // since we may use a different timer in the callee, we'd still need
                     // to update the original timer's current time after the call
+                    // 由于我们可能在被调用者中使用不同的计时器，因此在调用后仍需要更新原始计时器的当前时间
                     timer.update(time.milliseconds());
 
                     return false;
@@ -525,11 +553,18 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             // awaitMetadataUpdate() initiates new connections with configured backoff and avoids the busy loop.
             // When group management is used, metadata wait is already performed for this scenario as
             // coordinator is unknown, hence this check is not required.
-            if (metadata.updateRequested() && !client.hasReadyNodes(timer.currentTimeMs())) {
+            // 对于手动分配的分区，如果没有准备好的节点，则等待元数据。
+            // 如果所有节点的连接都失败，在尝试发送获取请求时触发的唤醒会导致轮询立即返回，从而导致轮询的紧密循环。
+            // 没有唤醒，poll() 在没有通道的情况下会阻塞超时，延迟重新连接。
+            // awaitMetadataUpdate() 以配置的退避时间启动新连接，避免繁忙循环。
+            // 使用组管理时，元数据等待已在这种情况下执行，因为协调器未知，因此不需要此检查。
+            if (metadata.updateRequested() && 
+                !client.hasReadyNodes(timer.currentTimeMs())) {
                 client.awaitMetadataUpdate(timer);
             }
         }
 
+        // 异步自动提交偏移量
         maybeAutoCommitOffsetsAsync(timer.currentTimeMs());
         return true;
     }
@@ -805,6 +840,8 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
         // we need to rejoin if we performed the assignment and metadata has changed;
         // also for those owned-but-no-longer-existed partitions we should drop them as lost
+        // 如果我们执行了 assignment 行为，或者 metadata 发生了变化，则需要重新加入 consumer group
+        // 同时，对于那些不再存在的分区，我们应该将它们丢弃
         if (assignmentSnapshot != null && !assignmentSnapshot.matches(metadataSnapshot)) {
             final String reason = String.format("cached metadata has changed from %s at the beginning of the rebalance to %s",
                 assignmentSnapshot, metadataSnapshot);
@@ -813,6 +850,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         }
 
         // we need to join if our subscription has changed since the last join
+        // 如果我们的订阅发生了变化，则需要重新加入 consumer group
         if (joinedSubscription != null && !joinedSubscription.equals(subscriptions.subscription())) {
             final String reason = String.format("subscription has changed from %s at the beginning of the rebalance to %s",
                 joinedSubscription, subscriptions.subscription());
@@ -825,25 +863,35 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
     /**
      * Refresh the committed offsets for provided partitions.
+     * <p>
+     * 刷新提供的分区的已提交偏移量。
      *
      * @param timer Timer bounding how long this method can block
      * @return true iff the operation completed within the timeout
      */
     public boolean refreshCommittedOffsetsIfNeeded(Timer timer) {
+        // 获取正在初始化的分区
         final Set<TopicPartition> initializingPartitions = subscriptions.initializingPartitions();
-
+        // 获取这些分区的已提交偏移量
         final Map<TopicPartition, OffsetAndMetadata> offsets = fetchCommittedOffsets(initializingPartitions, timer);
-        if (offsets == null) return false;
+        // 如果获取失败，返回 false
+        if (offsets == null) {
+            return false;
+        }
 
+        // 遍历这些分区，设置它们的偏移量
         for (final Map.Entry<TopicPartition, OffsetAndMetadata> entry : offsets.entrySet()) {
             final TopicPartition tp = entry.getKey();
             final OffsetAndMetadata offsetAndMetadata = entry.getValue();
+            // 如果偏移量不为空，设置它们的偏移量
             if (offsetAndMetadata != null) {
                 // first update the epoch if necessary
+                // 如果 epoch 不为空，更新 epoch
                 entry.getValue().leaderEpoch().ifPresent(epoch -> this.metadata.updateLastSeenEpochIfNewer(entry.getKey(), epoch));
 
                 // it's possible that the partition is no longer assigned when the response is received,
                 // so we need to ignore seeking if that's the case
+                // 可能这个分区已经分配给了其他 consumer，所以需要忽略这些消息
                 if (this.subscriptions.isAssigned(tp)) {
                     final ConsumerMetadata.LeaderAndEpoch leaderAndEpoch = metadata.currentLeader(tp);
                     final SubscriptionState.FetchPosition position = new SubscriptionState.FetchPosition(
@@ -937,6 +985,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     }
 
     // visible for testing
+    // 执行已完成的偏移提交回调
     void invokeCompletedOffsetCommitCallbacks() {
         if (asyncCommitFenced.get()) {
             throw new FencedInstanceIdException("Get fenced exception for group.instance.id "
@@ -944,10 +993,12 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 + ", current member.id is " + memberId());
         }
         while (true) {
+            // 遍历已完成的偏移提交回调
             OffsetCommitCompletion completion = completedOffsetCommits.poll();
             if (completion == null) {
                 break;
             }
+            // 执行已完成的偏移提交回调
             completion.invoke();
         }
     }
@@ -1469,11 +1520,14 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
     private static class MetadataSnapshot {
         private final int version;
+        // 记录每个 topic 的分区数量
         private final Map<String, Integer> partitionsPerTopic;
 
         private MetadataSnapshot(SubscriptionState subscription, Cluster cluster, int version) {
             Map<String, Integer> partitionsPerTopic = new HashMap<>();
+            // 遍历订阅的 topic 列表
             for (String topic : subscription.metadataTopics()) {
+                // 通过集群元数据获取 topic 的分区数
                 Integer numPartitions = cluster.partitionCountForTopic(topic);
                 if (numPartitions != null)
                     partitionsPerTopic.put(topic, numPartitions);
@@ -1482,8 +1536,10 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             this.version = version;
         }
 
+        // 比较两个 MetadataSnapshot 是否相等
         boolean matches(MetadataSnapshot other) {
-            return version == other.version || partitionsPerTopic.equals(other.partitionsPerTopic);
+            return version == other.version || 
+                partitionsPerTopic.equals(other.partitionsPerTopic);
         }
 
         @Override

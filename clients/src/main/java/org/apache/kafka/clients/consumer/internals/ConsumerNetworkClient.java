@@ -155,6 +155,8 @@ public class ConsumerNetworkClient implements Closeable {
 
     /**
      * Block waiting on the metadata refresh with a timeout.
+     * <p>
+     *     阻塞等待元数据刷新，直到超时。
      *
      * @return true if update succeeded, false otherwise.
      */
@@ -169,9 +171,15 @@ public class ConsumerNetworkClient implements Closeable {
     /**
      * Ensure our metadata is fresh (if an update is expected, this will block
      * until it has completed).
+     * <p>
+     *     确保我们的元数据是最新的（如果需要更新，这将阻塞直到它完成）。
+     *
+     * @param timer 计时器
+     * @return 如果元数据已更新，则返回 true，否则返回 false
      */
     boolean ensureFreshMetadata(Timer timer) {
-        if (this.metadata.updateRequested() || this.metadata.timeToNextUpdate(timer.currentTimeMs()) == 0) {
+        if (this.metadata.updateRequested() || 
+                this.metadata.timeToNextUpdate(timer.currentTimeMs()) == 0) {
             return awaitMetadataUpdate(timer);
         } else {
             // the metadata is already fresh
@@ -539,6 +547,8 @@ public class ConsumerNetworkClient implements Closeable {
     /**
      * Check if the code is disconnected and unavailable for immediate reconnection (i.e. if it is in
      * reconnect backoff window following the disconnect).
+     * <p>
+     *     检查代码是否断开连接并不可用于立即重新连接（即如果在断开连接后的重新连接回退窗口中）。
      */
     public boolean isUnavailable(Node node) {
         lock.lock();

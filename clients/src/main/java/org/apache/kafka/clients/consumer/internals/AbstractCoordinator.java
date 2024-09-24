@@ -310,12 +310,17 @@ public abstract class AbstractCoordinator implements Closeable {
      * to ensure that the member stays in the group. If an interval of time longer than the
      * provided rebalance timeout expires without calling this method, then the client will proactively
      * leave the group.
+     * <p>
+     * 检查心跳线程的状态（如果它处于活动状态）并指示客户端的活跃性。
+     * 这必须在调用 {@link #ensureActiveGroup()} 之后定期调用，以确保成员保持在组中。
+     * 如果一个时间间隔比提供的重新平衡超时更长的时间没有调用这个方法，那么客户端将主动离开组。
      *
      * @param now current time in milliseconds
      * @throws RuntimeException for unexpected errors raised from the heartbeat thread
      */
     protected synchronized void pollHeartbeat(long now) {
         if (heartbeatThread != null) {
+            // 如果心跳线程失败了，则抛出异常
             if (heartbeatThread.hasFailed()) {
                 // set the heartbeat thread to null and raise an exception. If the user catches it,
                 // the next call to ensureActiveGroup() will spawn a new heartbeat thread.
@@ -324,6 +329,7 @@ public abstract class AbstractCoordinator implements Closeable {
                 throw cause;
             }
             // Awake the heartbeat thread if needed
+            // 如果心跳线程需要保持心跳连接，则唤醒心跳线程
             if (heartbeat.shouldHeartbeat(now)) {
                 notify();
             }
@@ -874,6 +880,9 @@ public abstract class AbstractCoordinator implements Closeable {
 
     /**
      * Check if we know who the coordinator is and we have an active connection
+     * <p>
+     *     检查我们是否知道 group coordinator 是谁，以及我们是否有一个活动的连接
+     *
      * @return true if the coordinator is unknown
      */
     public boolean coordinatorUnknown() {
@@ -883,6 +892,8 @@ public abstract class AbstractCoordinator implements Closeable {
     /**
      * Get the coordinator if its connection is still active. Otherwise mark it unknown and
      * return null.
+     * <p>
+     *     如果连接仍然活动，则获取协调员。否则标记为未知并返回 null。
      *
      * @return the current coordinator or null if it is unknown
      */
@@ -1034,6 +1045,9 @@ public abstract class AbstractCoordinator implements Closeable {
     /**
      * Sends LeaveGroupRequest and logs the {@code leaveReason}, unless this member is using static membership or is already
      * not part of the group (ie does not have a valid member id, is in the UNJOINED state, or the coordinator is unknown).
+     * <p>
+     *     发送 LeaveGroupRequest 并记录 leaveReason，除非此成员正在使用静态成员身份或已经不再是组的一部分
+     *     （即没有有效的成员 ID，处于 UNJOINED 状态，或协调员未知）。
      *
      * @param leaveReason the reason to leave the group for logging
      * @throws KafkaException if the rebalance callback throws exception
@@ -1044,12 +1058,19 @@ public abstract class AbstractCoordinator implements Closeable {
         // Starting from 2.3, only dynamic members will send LeaveGroupRequest to the broker,
         // consumer with valid group.instance.id is viewed as static member that never sends LeaveGroup,
         // and the membership expiration is only controlled by session timeout.
-        if (isDynamicMember() && !coordinatorUnknown() &&
-            state != MemberState.UNJOINED && generation.hasMemberId()) {
+        // 从 2.3 开始，只有动态成员才会向代理发送 LeaveGroupRequest，
+        // 具有有效 group.instance.id 的消费者被视为永远不会发送 LeaveGroup 的静态成员，
+        // 并且成员资格到期仅由会话超时控制。
+        if (isDynamicMember() && // 是动态成员
+                !coordinatorUnknown() && // 能找到 coordinator
+                state != MemberState.UNJOINED &&
+                generation.hasMemberId()) {
             // this is a minimal effort attempt to leave the group. we do not
             // attempt any resending if the request fails or times out.
+            // 这是一个最小的尝试离开组。如果请求失败或超时，我们不会尝试重新发送。
             log.info("Member {} sending LeaveGroup request to coordinator {} due to {}",
                 generation.memberId, coordinator, leaveReason);
+            // 构造一个 leave group 请求
             LeaveGroupRequest.Builder request = new LeaveGroupRequest.Builder(
                 rebalanceConfig.groupId,
                 Collections.singletonList(new MemberIdentity().setMemberId(generation.memberId))

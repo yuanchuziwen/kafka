@@ -483,6 +483,8 @@ public class Fetcher<K, V> implements Closeable {
 
     /**
      * Validate offsets for all assigned partitions for which a leader change has been detected.
+     * <p>
+     * 验证所有分配的分区，如果检测到领导者的变化，则验证偏移量。
      */
     public void validateOffsetsIfNeeded() {
         RuntimeException exception = cachedOffsetForLeaderException.getAndSet(null);
@@ -491,15 +493,18 @@ public class Fetcher<K, V> implements Closeable {
 
         // Validate each partition against the current leader and epoch
         // If we see a new metadata version, check all partitions
+        // 验证所有分配的分区，如果检测到领导者的变化，则验证偏移量。
         validatePositionsOnMetadataChange();
 
         // Collect positions needing validation, with backoff
+        // 收集需要验证的位置，使用退避策略
         Map<TopicPartition, FetchPosition> partitionsToValidate = subscriptions
                 .partitionsNeedingValidation(time.milliseconds())
                 .stream()
                 .filter(tp -> subscriptions.position(tp) != null)
                 .collect(Collectors.toMap(Function.identity(), subscriptions::position));
 
+        // 验证所有分配的分区，如果检测到领导者的变化，则验证偏移量。
         validateOffsetsAsync(partitionsToValidate);
     }
 
@@ -1436,6 +1441,8 @@ public class Fetcher<K, V> implements Closeable {
 
     /**
      * Clear the buffered data which are not a part of newly assigned partitions
+     * <p>
+     *     清空未分配的分区的缓冲数据
      *
      * @param assignedPartitions  newly assigned {@link TopicPartition}
      */

@@ -590,7 +590,8 @@ public class SubscriptionState {
     }
 
     public synchronized boolean hasAutoAssignedPartitions() {
-        return this.subscriptionType == SubscriptionType.AUTO_TOPICS || this.subscriptionType == SubscriptionType.AUTO_PATTERN;
+        return this.subscriptionType == SubscriptionType.AUTO_TOPICS || 
+            this.subscriptionType == SubscriptionType.AUTO_PATTERN;
     }
 
     public synchronized void position(TopicPartition tp, FetchPosition position) {
@@ -882,6 +883,7 @@ public class SubscriptionState {
 
     public synchronized boolean hasAllFetchPositions() {
         // Since this is in the hot-path for fetching, we do this instead of using java.util.stream API
+        // 由于这是获取的热路径，我们这样做而不是使用 java.util.stream API
         Iterator<TopicPartitionState> it = assignment.stateIterator();
         while (it.hasNext()) {
             if (!it.next().hasValidPosition()) {
