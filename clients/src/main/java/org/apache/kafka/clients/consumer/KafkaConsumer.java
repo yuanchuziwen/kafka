@@ -1758,17 +1758,26 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     /**
      * @throws KafkaException if the rebalance callback throws exception
      */
+    /**
+     * 从 Kafka 中拉取数据
+     * 
+     * @param timer 用于控制拉取超时的计时器
+     * @return 拉取到的记录，按主题分区组织
+     */
     private Map<TopicPartition, List<ConsumerRecord<K, V>>> pollForFetches(Timer timer) {
+        // 计算拉取超时时间
         long pollTimeout = coordinator == null ? timer.remainingMs() :
                 Math.min(coordinator.timeToNextPoll(timer.currentTimeMs()), timer.remainingMs());
 
         // if data is available already, return it immediately
+        // 如果数据已经可用，则立即返回
         final Map<TopicPartition, List<ConsumerRecord<K, V>>> records = fetcher.fetchedRecords();
         if (!records.isEmpty()) {
             return records;
         }
 
         // send any new fetches (won't resend pending fetches)
+        // 如果数据已经可用，则立即返回
         fetcher.sendFetches();
 
         // We do not want to be stuck blocking in poll if we are missing some positions
@@ -1776,20 +1785,25 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
         // NOTE: the use of cachedSubscriptionHashAllFetchPositions means we MUST call
         // updateAssignmentMetadataIfNeeded before this method.
+        // 我们不希望在 poll 中阻塞，如果我们缺少一些位置，因为偏移查找可能在失败后退避
+        // 注意：cachedSubscriptionHashAllFetchPositions 的使用意味着我们必须在此方法之前调用 updateAssignmentMetadataIfNeeded
         if (!cachedSubscriptionHashAllFetchPositions && pollTimeout > retryBackoffMs) {
             pollTimeout = retryBackoffMs;
         }
 
         log.trace("Polling for fetches with timeout {}", pollTimeout);
 
+        // 创建一个新的计时器用于拉取操作
         Timer pollTimer = time.timer(pollTimeout);
         client.poll(pollTimer, () -> {
             // since a fetch might be completed by the background thread, we need this poll condition
             // to ensure that we do not block unnecessarily in poll()
+            // 由于拉取可能由后台线程完成，我们需要这个轮询条件来确保我们不会在 poll() 中不必要地阻塞
             return !fetcher.hasAvailableFetches();
         });
         timer.update(pollTimer.currentTimeMs());
 
+        // 返回拉取到的记录
         return fetcher.fetchedRecords();
     }
 

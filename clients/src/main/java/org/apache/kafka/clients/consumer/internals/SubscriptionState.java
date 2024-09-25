@@ -601,6 +601,9 @@ public class SubscriptionState {
     /**
      * Enter the offset validation state if the leader for this partition is known to support a usable version of the
      * OffsetsForLeaderEpoch API. If the leader node does not support the API, simply complete the offset validation.
+     * <p>
+     *     如果已知此分区的 leader 支持可用版本的 OffsetsForLeaderEpoch API，则进入偏移量验证状态。
+     *     如果 leader 节点不支持 API，则简单地完成偏移量验证。
      *
      * @param apiVersions supported API versions
      * @param tp topic partition to validate
@@ -610,12 +613,17 @@ public class SubscriptionState {
     public synchronized boolean maybeValidatePositionForCurrentLeader(ApiVersions apiVersions,
                                                                       TopicPartition tp,
                                                                       Metadata.LeaderAndEpoch leaderAndEpoch) {
+        // 如果 leader 存在
         if (leaderAndEpoch.leader.isPresent()) {
+            // 获取到 leader 的 API 版本
             NodeApiVersions nodeApiVersions = apiVersions.get(leaderAndEpoch.leader.get().idString());
+            // 如果 leader 的 API 版本为空或 leader 支持 OffsetsForLeaderEpoch API 的版本
             if (nodeApiVersions == null || hasUsableOffsetForLeaderEpochVersion(nodeApiVersions)) {
+                // 进入偏移量验证状态
                 return assignedState(tp).maybeValidatePosition(leaderAndEpoch);
             } else {
                 // If the broker does not support a newer version of OffsetsForLeaderEpoch, we skip validation
+                // 如果 broker 不支持更新版本的 OffsetsForLeaderEpoch，则跳过验证
                 assignedState(tp).updatePositionLeaderNoValidation(leaderAndEpoch);
                 return false;
             }

@@ -50,6 +50,10 @@ import java.util.concurrent.locks.ReentrantLock;
  * Higher level consumer access to the network layer with basic support for request futures. This class
  * is thread-safe, but provides no synchronization for response callbacks. This guarantees that no locks
  * are held when they are invoked.
+ * <p>
+ * 高级消费者访问网络层，具有基本的支持请求未来的功能。
+ * 这个类是线程安全的，但不会为响应回调提供同步。
+ * 这保证了在调用时不会持有锁。
  */
 public class ConsumerNetworkClient implements Closeable {
     private static final int MAX_POLL_TIMEOUT_MS = 5000;
@@ -237,6 +241,8 @@ public class ConsumerNetworkClient implements Closeable {
 
     /**
      * Poll for any network IO.
+     * <p>
+     *     轮询网络 IO。
      * @param timer Timer bounding how long this method can block
      * @param pollCondition Nullable blocking condition
      */
@@ -246,12 +252,15 @@ public class ConsumerNetworkClient implements Closeable {
 
     /**
      * Poll for any network IO.
+     * <p>
+     *     轮询网络 IO。
      * @param timer Timer bounding how long this method can block
      * @param pollCondition Nullable blocking condition
      * @param disableWakeup If TRUE disable triggering wake-ups
      */
     public void poll(Timer timer, PollCondition pollCondition, boolean disableWakeup) {
         // there may be handlers which need to be invoked if we woke up the previous call to poll
+        // 可能有一些处理程序需要在我们上一次调用 poll 时调用
         firePendingCompletedRequests();
 
         lock.lock();
@@ -410,6 +419,9 @@ public class ConsumerNetworkClient implements Closeable {
         }
     }
 
+    /**
+     * 触发所有待完成的请求。
+     */
     private void firePendingCompletedRequests() {
         boolean completedRequestsFired = false;
         for (;;) {
