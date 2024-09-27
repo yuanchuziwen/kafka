@@ -2097,22 +2097,29 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * Overrides the fetch offsets that the consumer will use on the next {@link #poll(Duration) poll(timeout)}. If this API
      * is invoked for the same partition more than once, the latest offset will be used on the next poll(). Note that
      * you may lose data if this API is arbitrarily used in the middle of consumption, to reset the fetch offsets
+     * <p>
+     * 重写 consumer 将会在下次 {@link #poll(Duration) poll(timeout)} 使用的 fetch 偏移量。
+     * 如果这个 API 被同一个分区多次调用，那么下一个 poll 将使用最新的偏移量。
+     * 注意，如果这个 API 在消费过程中任意使用，以重置 fetch 偏移量，可能会丢失数据
      *
      * @throws IllegalArgumentException if the provided offset is negative
      * @throws IllegalStateException if the provided TopicPartition is not assigned to this consumer
      */
     @Override
     public void seek(TopicPartition partition, long offset) {
+        // 如果偏移量小于 0，则抛出异常
         if (offset < 0)
             throw new IllegalArgumentException("seek offset must not be a negative number");
 
         acquireAndEnsureOpen();
         try {
             log.info("Seeking to offset {} for partition {}", offset, partition);
+            // 创建一个新的 fetch 位置对象
             SubscriptionState.FetchPosition newPosition = new SubscriptionState.FetchPosition(
                     offset,
                     Optional.empty(), // This will ensure we skip validation
                     this.metadata.currentLeader(partition));
+            // 使用新的 fetch 位置更新订阅状态
             this.subscriptions.seekUnvalidated(partition, newPosition);
         } finally {
             release();
@@ -2143,11 +2150,14 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
             } else {
                 log.info("Seeking to offset {} for partition {}", offset, partition);
             }
+            // 从 metadata 中获取 partition 最新的 leader 和 epoch
             Metadata.LeaderAndEpoch currentLeaderAndEpoch = this.metadata.currentLeader(partition);
+            // 创建一个新的 fetch 位置对象
             SubscriptionState.FetchPosition newPosition = new SubscriptionState.FetchPosition(
                     offsetAndMetadata.offset(),
                     offsetAndMetadata.leaderEpoch(),
                     currentLeaderAndEpoch);
+            // 更新订阅状态中维护的信息
             this.updateLastSeenEpochIfNewer(partition, offsetAndMetadata);
             this.subscriptions.seekUnvalidated(partition, newPosition);
         } finally {
@@ -2159,6 +2169,10 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * Seek to the first offset for each of the given partitions. This function evaluates lazily, seeking to the
      * first offset in all partitions only when {@link #poll(Duration)} or {@link #position(TopicPartition)} are called.
      * If no partitions are provided, seek to the first offset for all of the currently assigned partitions.
+     * <p>
+     * 定位到每个给定分区的第一个偏移量。
+     * 这个函数是懒惰的，只有在调用 {@link #poll(Duration)} 或 {@link #position(TopicPartition)} 时才会真正定位到第一个偏移量。
+     * 如果未提供分区，则定位到所有当前分配的分区的第一个偏移量。
      *
      * @throws IllegalArgumentException if {@code partitions} is {@code null}
      * @throws IllegalStateException if any of the provided partitions are not currently assigned to this consumer
@@ -2170,7 +2184,9 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
         acquireAndEnsureOpen();
         try {
+            // 如果没有提供分区，则使用当前分配的分区
             Collection<TopicPartition> parts = partitions.size() == 0 ? this.subscriptions.assignedPartitions() : partitions;
+            // 请求重置偏移量到最早的偏移量
             subscriptions.requestOffsetReset(parts, OffsetResetStrategy.EARLIEST);
         } finally {
             release();
@@ -2206,9 +2222,16 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * Get the offset of the <i>next record</i> that will be fetched (if a record with that offset exists).
      * This method may issue a remote call to the server if there is no current position for the given partition.
      * <p>
+     * 获取给定分区的下一个记录的偏移量（如果该偏移量存在）。
+     * 这个方法可能会向服务器发起远程调用，如果没有当前的分区位置。
+     * <p>
      * This call will block until either the position could be determined or an unrecoverable error is
      * encountered (in which case it is thrown to the caller), or the timeout specified by {@code default.api.timeout.ms} expires
      * (in which case a {@link org.apache.kafka.common.errors.TimeoutException} is thrown to the caller).
+     * <p>
+     * 这个调用会一直阻塞，直到可以确定位置，或者遇到不可恢复的错误（在这种情况下，会抛出异常），
+     * 或者指定的超时时间（通过 {@code default.api.timeout.ms}）过期（在这种情况下，
+     * 会抛出 {@link org.apache.kafka.common.errors.TimeoutException} 异常）。
      *
      * @param partition The partition to get the position for
      * @return The current position of the consumer (that is, the offset of the next record to be fetched)
@@ -2262,19 +2285,25 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     public long position(TopicPartition partition, final Duration timeout) {
         acquireAndEnsureOpen();
         try {
+            // 如果给定的分区没有被分配给这个 consumer，则抛出异常
             if (!this.subscriptions.isAssigned(partition))
                 throw new IllegalStateException("You can only check the position for partitions assigned to this consumer.");
 
             Timer timer = time.timer(timeout);
             do {
+                // 获取订阅状态中给定分区的 fetch 位置
                 SubscriptionState.FetchPosition position = this.subscriptions.validPosition(partition);
+                // 如果 fetch 位置不为空，则返回该位置的偏移量
                 if (position != null)
                     return position.offset;
 
+                // 更新 fetch 位置
                 updateFetchPositions(timer);
+                // 执行 poll 操作
                 client.poll(timer);
             } while (timer.notExpired());
 
+            // 如果超时，则抛出异常
             throw new TimeoutException("Timeout of " + timeout.toMillis() + "ms expired before the position " +
                     "for partition " + partition + " could be determined");
         } finally {

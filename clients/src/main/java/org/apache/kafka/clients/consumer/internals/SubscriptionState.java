@@ -1104,6 +1104,7 @@ public class SubscriptionState {
         }
 
         private void validatePosition(FetchPosition position) {
+            // 如果 position 中包含 offsetEpoch 和 currentLeader，则进入 AWAIT_VALIDATION 状态
             if (position.offsetEpoch.isPresent() && position.currentLeader.epoch.isPresent()) {
                 transitionState(FetchStates.AWAIT_VALIDATION, () -> {
                     this.position = position;
@@ -1111,6 +1112,7 @@ public class SubscriptionState {
                 });
             } else {
                 // If we have no epoch information for the current position, then we can skip validation
+                // 如果当前位置没有 epoch 信息，则可以跳过验证
                 transitionState(FetchStates.FETCHING, () -> {
                     this.position = position;
                     this.nextRetryTimeMs = null;

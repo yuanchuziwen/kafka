@@ -380,6 +380,7 @@ public abstract class AbstractCoordinator implements Closeable {
             return false;
         }
 
+        // 开启心跳线程
         startHeartbeatThreadIfNeeded();
         return joinGroupIfNeeded(timer);
     }
