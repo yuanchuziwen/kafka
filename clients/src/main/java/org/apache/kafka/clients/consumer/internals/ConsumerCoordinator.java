@@ -487,7 +487,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     public boolean poll(Timer timer, boolean waitForJoinGroup) {
         // 更新订阅元数据（会触发 pattern 模式订阅的 topic 更新）
         maybeUpdateSubscriptionMetadata();
-        // 执行已完成的偏移提交回调
+        // 针对已经完成的 commit 操作，触发回调
         invokeCompletedOffsetCommitCallbacks();
 
         // 如果存在自动分配的分区
@@ -500,6 +500,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             // group proactively due to application inactivity even if (say) the coordinator cannot be found.
             // 始终更新心跳的最后轮询时间，以便即使（例如）找不到协调器，心跳线程也不会由于应用程序不活动而主动离开组。
             pollHeartbeat(timer.currentTimeMs());
+            // 如果 coordinator 未知，并且无法获取到 coordinator，则返回 false
             if (coordinatorUnknown() && !ensureCoordinatorReady(timer)) {
                 return false;
             }
@@ -835,6 +836,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
      */
     @Override
     public boolean rejoinNeededOrPending() {
+        // 如果没有使用自动分配的分区，则不需要重新加入
         if (!subscriptions.hasAutoAssignedPartitions())
             return false;
 
@@ -842,7 +844,8 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         // also for those owned-but-no-longer-existed partitions we should drop them as lost
         // 如果我们执行了 assignment 行为，或者 metadata 发生了变化，则需要重新加入 consumer group
         // 同时，对于那些不再存在的分区，我们应该将它们丢弃
-        if (assignmentSnapshot != null && !assignmentSnapshot.matches(metadataSnapshot)) {
+        if (assignmentSnapshot != null &&
+                !assignmentSnapshot.matches(metadataSnapshot)) {
             final String reason = String.format("cached metadata has changed from %s at the beginning of the rebalance to %s",
                 assignmentSnapshot, metadataSnapshot);
             requestRejoin(reason);
@@ -985,8 +988,12 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     }
 
     // visible for testing
-    // 执行已完成的偏移提交回调
+    /**
+     * 执行已完成的偏移提交回调
+     * 这个方法会在 coordinator.poll、commitOffsetsAsync、commitOffsetsSync、close 方法中调用
+     */
     void invokeCompletedOffsetCommitCallbacks() {
+        // 如果已经获取到 fencing 异常，则抛出 FencedInstanceIdException 异常
         if (asyncCommitFenced.get()) {
             throw new FencedInstanceIdException("Get fenced exception for group.instance.id "
                 + rebalanceConfig.groupInstanceId.orElse("unset_instance_id")
@@ -1004,8 +1011,10 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     }
 
     public void commitOffsetsAsync(final Map<TopicPartition, OffsetAndMetadata> offsets, final OffsetCommitCallback callback) {
+        // 执行已完成的偏移提交回调
         invokeCompletedOffsetCommitCallbacks();
 
+        // 如果 coordinator 已知，则发送偏移量提交请求
         if (!coordinatorUnknown()) {
             doCommitOffsetsAsync(offsets, callback);
         } else {
@@ -1015,11 +1024,18 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             // coordinator lookup request. This is fine because the listeners will be invoked in
             // the same order that they were added. Note also that AbstractCoordinator prevents
             // multiple concurrent coordinator lookup requests.
+            // 我们不知道当前的 coordinator，所以尝试找到它并发送提交请求，或者失败
+            // （我们不希望递归的重试，这可能会导致偏移量提交到达的顺序不正确）。
+            // 注意，可能会有多个偏移量提交链接到同一个 coordinator 查找请求。
+            // 这是可以的，因为 listeners 将按它们被添加的顺序被调用。
+            // 还要注意，AbstractCoordinator 防止并发 coordinator 查找请求。
             pendingAsyncCommits.incrementAndGet();
+            // 查找 coordinator，并添加监听器
             lookupCoordinator().addListener(new RequestFutureListener<Void>() {
                 @Override
                 public void onSuccess(Void value) {
                     pendingAsyncCommits.decrementAndGet();
+                    // 成功找到 coordinator 后，发送偏移量提交请求
                     doCommitOffsetsAsync(offsets, callback);
                     client.pollNoWakeup();
                 }
@@ -1027,6 +1043,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 @Override
                 public void onFailure(RuntimeException e) {
                     pendingAsyncCommits.decrementAndGet();
+                    // 如果查找 coordinator 失败，则添加一个偏移提交回调
                     completedOffsetCommits.add(new OffsetCommitCompletion(callback, offsets,
                             new RetriableCommitFailedException(e)));
                 }
@@ -1036,12 +1053,17 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         // ensure the commit has a chance to be transmitted (without blocking on its completion).
         // Note that commits are treated as heartbeats by the coordinator, so there is no need to
         // explicitly allow heartbeats through delayed task execution.
+        // 确保提交有机会被传输（不阻塞其完成）。
+        // 注意，提交被视为心跳，因此没有必要通过延迟任务执行来显式允许心跳。
         client.pollNoWakeup();
     }
 
     private void doCommitOffsetsAsync(final Map<TopicPartition, OffsetAndMetadata> offsets, final OffsetCommitCallback callback) {
+        // 发送偏移量提交请求
         RequestFuture<Void> future = sendOffsetCommitRequest(offsets);
+        // 如果没有回调，则使用默认的偏移量提交回调
         final OffsetCommitCallback cb = callback == null ? defaultOffsetCommitCallback : callback;
+        // 添加偏移量提交请求的监听器
         future.addListener(new RequestFutureListener<Void>() {
             @Override
             public void onSuccess(Void value) {
@@ -1068,48 +1090,72 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     /**
      * Commit offsets synchronously. This method will retry until the commit completes successfully
      * or an unrecoverable error is encountered.
+     * <p>
+     * 提交偏移量同步。此方法将重试，直到提交成功或遇到不可恢复的错误。
+     *
      * @param offsets The offsets to be committed
+     *                要提交的偏移量
      * @throws org.apache.kafka.common.errors.AuthorizationException if the consumer is not authorized to the group
      *             or to any of the specified partitions. See the exception for more details
+     *             如果消费者未被授权访问组或任何指定的分区，则抛出 AuthorizationException 异常。有关更多详细信息，请参见异常
      * @throws CommitFailedException if an unrecoverable error occurs before the commit can be completed
+     *            在提交完成之前发生不可恢复的错误时抛出 CommitFailedException 异常
      * @throws FencedInstanceIdException if a static member gets fenced
+     *           如果静态成员被隔离，则抛出 FencedInstanceIdException 异常
      * @return If the offset commit was successfully sent and a successful response was received from
      *         the coordinator
+     *         如果成功发送了偏移量提交，并且从协调器接收到了成功响应
      */
     public boolean commitOffsetsSync(Map<TopicPartition, OffsetAndMetadata> offsets, Timer timer) {
+        // 执行已完成的偏移提交回调
         invokeCompletedOffsetCommitCallbacks();
 
+        // 如果偏移量为空，返回 true
         if (offsets.isEmpty())
             return true;
 
+        // 持续尝试提交偏移量，直到成功或超时
         do {
+            // 如果找不到 coordinator，则返回 false
             if (coordinatorUnknown() && !ensureCoordinatorReady(timer)) {
                 return false;
             }
 
+            // 发送偏移量提交请求
             RequestFuture<Void> future = sendOffsetCommitRequest(offsets);
+            // 轮询请求
             client.poll(future, timer);
 
             // We may have had in-flight offset commits when the synchronous commit began. If so, ensure that
             // the corresponding callbacks are invoked prior to returning in order to preserve the order that
             // the offset commits were applied.
+            // 当同步的 commit 开始时，可能有一些处于 in-flight 状态的偏移量提交请求。
+            // 如果存在，则执行已完成的偏移提交回调，以确保这些偏移量提交请求的回调函数按顺序执行，以保持偏移量提交的顺序。
             invokeCompletedOffsetCommitCallbacks();
 
+            // 如果请求成功，则执行偏移量提交拦截器
             if (future.succeeded()) {
                 if (interceptors != null)
                     interceptors.onCommit(offsets);
                 return true;
             }
 
+            // 如果请求失败，并且不是可重试的，则抛出异常
             if (future.failed() && !future.isRetriable())
                 throw future.exception();
 
+            // 如果请求失败，并且是可重试的，则休眠一段时间后重试
             timer.sleep(rebalanceConfig.retryBackoffMs);
         } while (timer.notExpired());
 
+        // 如果超时，则返回 false
         return false;
     }
 
+    /**
+     * 自动提交偏移量异步
+     * @param now 当前时间
+     */
     public void maybeAutoCommitOffsetsAsync(long now) {
         if (autoCommitEnabled) {
             nextAutoCommitTimer.update(now);
@@ -1121,9 +1167,11 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     }
 
     private void doAutoCommitOffsetsAsync() {
+        // 获取所有已消费的偏移量
         Map<TopicPartition, OffsetAndMetadata> allConsumedOffsets = subscriptions.allConsumed();
         log.debug("Sending asynchronous auto-commit of offsets {}", allConsumedOffsets);
 
+        // 异步提交偏移量
         commitOffsetsAsync(allConsumedOffsets, (offsets, exception) -> {
             if (exception != null) {
                 if (exception instanceof RetriableCommitFailedException) {
@@ -1169,52 +1217,68 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
      * Commit offsets for the specified list of topics and partitions. This is a non-blocking call
      * which returns a request future that can be polled in the case of a synchronous commit or ignored in the
      * asynchronous case.
-     *
-     * NOTE: This is visible only for testing
+     * <p>
+     * 为指定的主题和分区提交偏移量。
+     * 这是一个非阻塞调用，返回一个请求 future，可以在同步提交的情况下进行轮询，或者在异步提交的情况下忽略。
+     * <p>
+     * NOTE: 此方法仅对测试可见
      *
      * @param offsets The list of offsets per partition that should be committed.
      * @return A request future whose value indicates whether the commit was successful or not
      */
     RequestFuture<Void> sendOffsetCommitRequest(final Map<TopicPartition, OffsetAndMetadata> offsets) {
+        // 如果偏移量为空，返回一个空的请求 future
         if (offsets.isEmpty())
             return RequestFuture.voidSuccess();
 
+        // 获取 coordinator
         Node coordinator = checkAndGetCoordinator();
+        // 如果 coordinator 为空，返回一个 coordinator 不可用的请求 future
         if (coordinator == null)
             return RequestFuture.coordinatorNotAvailable();
 
         // create the offset commit request
+        // 创建偏移量提交请求
         Map<String, OffsetCommitRequestData.OffsetCommitRequestTopic> requestTopicDataMap = new HashMap<>();
+        // 遍历需要提交偏移量的每一个分区
         for (Map.Entry<TopicPartition, OffsetAndMetadata> entry : offsets.entrySet()) {
             TopicPartition topicPartition = entry.getKey();
             OffsetAndMetadata offsetAndMetadata = entry.getValue();
+            // 验证偏移量数据正确
             if (offsetAndMetadata.offset() < 0) {
                 return RequestFuture.failure(new IllegalArgumentException("Invalid offset: " + offsetAndMetadata.offset()));
             }
 
+            // 获取或创建主题数据
             OffsetCommitRequestData.OffsetCommitRequestTopic topic = requestTopicDataMap
                     .getOrDefault(topicPartition.topic(),
                             new OffsetCommitRequestData.OffsetCommitRequestTopic()
                                     .setName(topicPartition.topic())
                     );
-
+            // 添加分区数据
             topic.partitions().add(new OffsetCommitRequestData.OffsetCommitRequestPartition()
                     .setPartitionIndex(topicPartition.partition())
                     .setCommittedOffset(offsetAndMetadata.offset())
                     .setCommittedLeaderEpoch(offsetAndMetadata.leaderEpoch().orElse(RecordBatch.NO_PARTITION_LEADER_EPOCH))
                     .setCommittedMetadata(offsetAndMetadata.metadata())
             );
+            // 将主题数据添加到请求中
             requestTopicDataMap.put(topicPartition.topic(), topic);
         }
 
+        // 获取 generation
         final Generation generation;
+        // 如果订阅了自动分配的分区
         if (subscriptions.hasAutoAssignedPartitions()) {
             generation = generationIfStable();
             // if the generation is null, we are not part of an active group (and we expect to be).
             // the only thing we can do is fail the commit and let the user rejoin the group in poll().
+            // 如果 generation 为空，则表示消费者不是活跃组的一部分（并且我们期望它是）。
+            // 我们能做的唯一事情是使提交失败，并让用户在 poll() 中重新加入组。 
             if (generation == null) {
                 log.info("Failing OffsetCommit request since the consumer is not part of an active group");
 
+                // 如果正在重新平衡，则返回 RebalanceInProgressException 异常
                 if (rebalanceInProgress()) {
                     // if the client knows it is already rebalancing, we can use RebalanceInProgressException instead of
                     // CommitFailedException to indicate this is not a fatal error
@@ -1222,6 +1286,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                         "consumer is undergoing a rebalance for auto partition assignment. You can try completing the rebalance " +
                         "by calling poll() and then retry the operation."));
                 } else {
+                    // 如果消费者不是活跃组的一部分，则返回 CommitFailedException 异常
                     return RequestFuture.failure(new CommitFailedException("Offset commit cannot be completed since the " +
                         "consumer is not part of an active group for auto partition assignment; it is likely that the consumer " +
                         "was kicked out of the group."));
@@ -1231,6 +1296,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             generation = Generation.NO_GENERATION;
         }
 
+        // 创建偏移量提交请求
         OffsetCommitRequest.Builder builder = new OffsetCommitRequest.Builder(
                 new OffsetCommitRequestData()
                         .setGroupId(this.rebalanceConfig.groupId)
@@ -1242,6 +1308,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
         log.trace("Sending OffsetCommit request with {} to coordinator {}", offsets, coordinator);
 
+        // 发送偏移量提交请求，并注册偏移量提交响应处理器
         return client.send(coordinator, builder)
                 .compose(new OffsetCommitResponseHandler(offsets, generation));
     }
@@ -1250,7 +1317,9 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         private final Map<TopicPartition, OffsetAndMetadata> offsets;
 
         private OffsetCommitResponseHandler(Map<TopicPartition, OffsetAndMetadata> offsets, Generation generation) {
+            // 调用父类构造方法，传入 generation
             super(generation);
+            // 初始化 offsets
             this.offsets = offsets;
         }
 
@@ -1259,23 +1328,29 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             sensors.commitSensor.record(response.requestLatencyMs());
             Set<String> unauthorizedTopics = new HashSet<>();
 
+            // 遍历 commitResponse 中的每个 topic
             for (OffsetCommitResponseData.OffsetCommitResponseTopic topic : commitResponse.data().topics()) {
+                // 遍历 topic 中的每个分区
                 for (OffsetCommitResponseData.OffsetCommitResponsePartition partition : topic.partitions()) {
                     TopicPartition tp = new TopicPartition(topic.name(), partition.partitionIndex());
+                    // 获取偏移量
                     OffsetAndMetadata offsetAndMetadata = this.offsets.get(tp);
-
+                    // 获取偏移量
                     long offset = offsetAndMetadata.offset();
 
                     Errors error = Errors.forCode(partition.errorCode());
+                    // 如果偏移量提交成功
                     if (error == Errors.NONE) {
                         log.debug("Committed offset {} for partition {}", offset, tp);
                     } else {
+                        // 如果偏移量提交失败，并且错误是可重试的
                         if (error.exception() instanceof RetriableException) {
                             log.warn("Offset commit failed on partition {} at offset {}: {}", tp, offset, error.message());
                         } else {
                             log.error("Offset commit failed on partition {} at offset {}: {}", tp, offset, error.message());
                         }
 
+                        // 如果偏移量提交失败，并且错误是 GROUP_AUTHORIZATION_FAILED
                         if (error == Errors.GROUP_AUTHORIZATION_FAILED) {
                             future.raise(GroupAuthorizationException.forGroupId(rebalanceConfig.groupId));
                             return;
@@ -1297,13 +1372,18 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                             markCoordinatorUnknown(error);
                             future.raise(error);
                             return;
+
+                            // 如果偏移量提交失败，并且错误是 FENCED_INSTANCE_ID
                         } else if (error == Errors.FENCED_INSTANCE_ID) {
                             log.info("OffsetCommit failed with {} due to group instance id {} fenced", sentGeneration, rebalanceConfig.groupInstanceId);
 
                             // if the generation has changed or we are not in rebalancing, do not raise the fatal error but rebalance-in-progress
+                            // 如果 generation 没有变化，或者我们不在重新平衡，则不抛出致命错误，而是抛出 RebalanceInProgressException 异常
                             if (generationUnchanged()) {
+                                // 如果 generation 没有变化，则抛出 FencedInstanceIdException 异常
                                 future.raise(error);
                             } else {
+                                // 如果 generation 变化了，则抛出 CommitFailedException 异常
                                 KafkaException exception;
                                 synchronized (ConsumerCoordinator.this) {
                                     if (ConsumerCoordinator.this.state == MemberState.PREPARING_REBALANCE) {
@@ -1325,6 +1405,12 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                              * In this case we would throw a RebalanceInProgressException,
                              * request re-join but do not reset generations. If the callers decide to retry they
                              * can go ahead and call poll to finish up the rebalance first, and then try commit again.
+                             * <p>
+                             * 在 join-group 和 sync-group 之间，消费者不应该尝试在偏移量提交之间提交偏移量，
+                             * 因此在 CompletingRebalance 阶段，在 broker 端不应看到提交偏移量请求；
+                             * 如果发生这种情况，broker 会返回此错误，表示我们仍在重新平衡中间。
+                             * 在这种情况下，我们会抛出 RebalanceInProgressException，请求重新加入，但不重置 generation。
+                             * 如果调用者决定重试，可以先调用 poll 完成重新平衡，然后再尝试提交。
                              */
                             requestRejoin("offset commit failed since group is already rebalancing");
                             future.raise(new RebalanceInProgressException("Offset commit cannot be completed since the " +
@@ -1337,6 +1423,8 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
                             // only need to reset generation and re-join group if generation has not changed or we are not in rebalancing;
                             // otherwise only raise rebalance-in-progress error
+                            // 如果 generation 没有变化，或者我们不在重新平衡，则只抛出 RebalanceInProgressException 异常
+                            // 否则只抛出 CommitFailedException 异常
                             KafkaException exception;
                             synchronized (ConsumerCoordinator.this) {
                                 if (!generationUnchanged() && ConsumerCoordinator.this.state == MemberState.PREPARING_REBALANCE) {

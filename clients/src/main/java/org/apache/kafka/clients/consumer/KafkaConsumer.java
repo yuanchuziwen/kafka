@@ -1719,6 +1719,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                     }
                 }
 
+                // 从 Kafka 中拉取数据
                 final Map<TopicPartition, List<ConsumerRecord<K, V>>> records = pollForFetches(timer);
                 if (!records.isEmpty()) {
                     // before returning the fetched records, we can send off the next round of fetches
@@ -1733,6 +1734,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                         client.transmitSends();
                     }
 
+                    // 触发拦截器的 onConsume 方法
                     return this.interceptors.onConsume(new ConsumerRecords<>(records));
                 }
             } while (timer.notExpired());
@@ -1811,16 +1813,27 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * Commit offsets returned on the last {@link #poll(Duration) poll()} for all the subscribed list of topics and
      * partitions.
      * <p>
+     * 此方法提交最后一次 {@link #poll(Duration) poll()} 返回的偏移量，用于所有订阅的主题和分区。
+     * 
+     * <p>
      * This commits offsets only to Kafka. The offsets committed using this API will be used on the first fetch after
      * every rebalance and also on startup. As such, if you need to store offsets in anything other than Kafka, this API
      * should not be used.
+     * 提交的偏移量仅提交到 Kafka。
+     * 使用此 API 提交的偏移量将在每次重新平衡后和启动时使用。
+     * 因此，如果需要将偏移量存储在 Kafka 之外，则不应使用此 API。
      * <p>
      * This is a synchronous commit and will block until either the commit succeeds, an unrecoverable error is
      * encountered (in which case it is thrown to the caller), or the timeout specified by {@code default.api.timeout.ms} expires
      * (in which case a {@link org.apache.kafka.common.errors.TimeoutException} is thrown to the caller).
      * <p>
+     * 这是一个同步提交，会阻塞直到提交成功，或者遇到不可恢复的错误（在这种情况下，会抛出错误给调用者），
+     * 或者指定的超时时间 {@code default.api.timeout.ms} 过期（在这种情况下，会抛出 {@link org.apache.kafka.common.errors.TimeoutException} 给调用者）。
+     * <p>
      * Note that asynchronous offset commits sent previously with the {@link #commitAsync(OffsetCommitCallback)}
      * (or similar) are guaranteed to have their callbacks invoked prior to completion of this method.
+     * <p>
+     * 注意：使用 {@link #commitAsync(OffsetCommitCallback)} (或类似) 发送的异步偏移提交保证在调用此方法之前会调用其回调。
      *
      * @throws org.apache.kafka.clients.consumer.CommitFailedException if the commit failed and cannot be retried.
      *             This fatal error can only occur if you are using automatic group management with {@link #subscribe(Collection)},
@@ -1848,6 +1861,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      */
     @Override
     public void commitSync() {
+        // 默认超时时间为 default.api.timeout.ms
         commitSync(Duration.ofMillis(defaultApiTimeoutMs));
     }
 
@@ -1891,6 +1905,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      */
     @Override
     public void commitSync(Duration timeout) {
+        // 提交所有已消费的偏移量
         commitSync(subscriptions.allConsumed(), timeout);
     }
 
@@ -1989,8 +2004,11 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     public void commitSync(final Map<TopicPartition, OffsetAndMetadata> offsets, final Duration timeout) {
         acquireAndEnsureOpen();
         try {
+            // 如果没有配置 group.id，则抛出异常
             maybeThrowInvalidGroupIdException();
+            // 如果 offsets 中有更新的 epoch 值，则触发 metadata 的更新
             offsets.forEach(this::updateLastSeenEpochIfNewer);
+            // 调用 coordinator 的 commitOffsetsSync 方法提交偏移量
             if (!coordinator.commitOffsetsSync(new HashMap<>(offsets), time.timer(timeout))) {
                 throw new TimeoutException("Timeout of " + timeout.toMillis() + "ms expired before successfully " +
                         "committing offsets " + offsets);
@@ -2002,7 +2020,11 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
     /**
      * Commit offsets returned on the last {@link #poll(Duration)} for all the subscribed list of topics and partition.
-     * Same as {@link #commitAsync(OffsetCommitCallback) commitAsync(null)}
+     * <p>
+     * 提交最后一次 {@link #poll(Duration)} 消费的偏移量
+     * <p>
+     * 与 {@link #commitAsync(OffsetCommitCallback) commitAsync(null)} 相同
+     * 
      * @throws org.apache.kafka.common.errors.FencedInstanceIdException if this consumer instance gets fenced by broker.
      */
     @Override
@@ -2059,9 +2081,12 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     public void commitAsync(final Map<TopicPartition, OffsetAndMetadata> offsets, OffsetCommitCallback callback) {
         acquireAndEnsureOpen();
         try {
+            // 如果没有配置 group.id，则抛出异常
             maybeThrowInvalidGroupIdException();
             log.debug("Committing offsets: {}", offsets);
+            // 如果 offsets 中有更新的 epoch 值，则触发 metadata 的更新
             offsets.forEach(this::updateLastSeenEpochIfNewer);
+            // 调用 coordinator 的 commitOffsetsAsync 方法提交偏移量
             coordinator.commitOffsetsAsync(new HashMap<>(offsets), callback);
         } finally {
             release();
@@ -2925,6 +2950,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
         // 如果任何分区由于领导者的变化而被截断，我们需要验证偏移量
         fetcher.validateOffsetsIfNeeded();
 
+        // 确认此时是否知晓了所有订阅分区的 fetch 位置
         cachedSubscriptionHashAllFetchPositions = subscriptions.hasAllFetchPositions();
         if (cachedSubscriptionHashAllFetchPositions) {
             return true;
@@ -2946,10 +2972,13 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
         // If there are partitions still needing a position and a reset policy is defined,
         // request reset using the default policy. If no reset strategy is defined and there
         // are partitions with a missing position, then we will raise an exception.
+        // 如果此时仍有分区需要 position，并且定义了 reset 策略，则使用默认策略请求 reset。
+        // 如果没有定义 reset 策略，并且有分区缺少 position，则会引发异常。
         subscriptions.resetInitializingPositions();
 
         // Finally send an asynchronous request to lookup and update the positions of any
         // partitions which are awaiting reset.
+        // 最终，发送一个异步请求来查找和更新任何正在等待 reset 的分区的位置。
         fetcher.resetOffsetsIfNeeded();
 
         return true;

@@ -216,6 +216,9 @@ public class ConsumerNetworkClient implements Closeable {
 
     /**
      * Block until the provided request future request has finished or the timeout has expired.
+     * <p>
+     *     阻塞直到提供的请求 future 请求完成或超时过期。
+     *
      * @param future The request future to wait for
      * @param timer Timer bounding how long this method can block
      * @return true if the future is done, false otherwise
@@ -225,6 +228,7 @@ public class ConsumerNetworkClient implements Closeable {
     public boolean poll(RequestFuture<?> future, Timer timer) {
         do {
             poll(timer, future);
+            // 如果 future 没有完成，并且 timer 没有过期，则继续轮询
         } while (!future.isDone() && timer.notExpired());
         return future.isDone();
     }
@@ -245,6 +249,7 @@ public class ConsumerNetworkClient implements Closeable {
      *     轮询网络 IO。
      * @param timer Timer bounding how long this method can block
      * @param pollCondition Nullable blocking condition
+     *                      可空的阻塞条件
      */
     public void poll(Timer timer, PollCondition pollCondition) {
         poll(timer, pollCondition, false);
@@ -266,21 +271,31 @@ public class ConsumerNetworkClient implements Closeable {
         lock.lock();
         try {
             // Handle async disconnects prior to attempting any sends
+            // 在尝试发送任何请求之前处理异步断开连接
             handlePendingDisconnects();
 
             // send all the requests we can send now
+            // 尝试发送所有可以发送的请求
             long pollDelayMs = trySend(timer.currentTimeMs());
 
             // check whether the poll is still needed by the caller. Note that if the expected completion
             // condition becomes satisfied after the call to shouldBlock() (because of a fired completion
             // handler), the client will be woken up.
-            if (pendingCompletion.isEmpty() && (pollCondition == null || pollCondition.shouldBlock())) {
+            // 检查是否仍然需要轮询。
+            // 如果预期的完成条件在调用 shouldBlock() 之后变得满足（因为完成处理程序已触发），
+            // 则客户端将被唤醒。
+            if (pendingCompletion.isEmpty() &&
+                    (pollCondition == null ||
+                            pollCondition.shouldBlock())) {
                 // if there are no requests in flight, do not block longer than the retry backoff
+                // 如果没有正在进行的请求，则不要阻塞超过重试回退时间
                 long pollTimeout = Math.min(timer.remainingMs(), pollDelayMs);
                 if (client.inFlightRequestCount() == 0)
                     pollTimeout = Math.min(pollTimeout, retryBackoffMs);
+                // 轮询
                 client.poll(pollTimeout, timer.currentTimeMs());
             } else {
+                // 轮询
                 client.poll(0, timer.currentTimeMs());
             }
             timer.update();
@@ -288,23 +303,30 @@ public class ConsumerNetworkClient implements Closeable {
             // handle any disconnects by failing the active requests. note that disconnects must
             // be checked immediately following poll since any subsequent call to client.ready()
             // will reset the disconnect status
+            // 通过检查连接断开情况来失败活动的请求。
+            // 注意，断开连接必须在轮询后立即检查，因为任何后续对 client.ready() 的调用都会重置断开连接状态
             checkDisconnects(timer.currentTimeMs());
             if (!disableWakeup) {
                 // trigger wakeups after checking for disconnects so that the callbacks will be ready
                 // to be fired on the next call to poll()
+                // 在检查断开连接后触发唤醒，以便在下次调用 poll() 时准备调用回调
                 maybeTriggerWakeup();
             }
             // throw InterruptException if this thread is interrupted
+            // 抛出 InterruptException 如果这个线程被中断
             maybeThrowInterruptException();
 
             // try again to send requests since buffer space may have been
             // cleared or a connect finished in the poll
+            // 尝试再次发送请求，因为 poll 中可能已清除缓冲区空间或连接已完成
             trySend(timer.currentTimeMs());
 
             // fail requests that couldn't be sent if they have expired
+            // 如果请求已过期，则失败
             failExpiredRequests(timer.currentTimeMs());
 
             // clean unsent requests collection to keep the map from growing indefinitely
+            // 清理 unsent 请求集合，以防止 map 无限增长
             unsent.clean();
         } finally {
             lock.unlock();
@@ -327,17 +349,24 @@ public class ConsumerNetworkClient implements Closeable {
      * Poll for network IO in best-effort only trying to transmit the ready-to-send request
      * Do not check any pending requests or metadata errors so that no exception should ever
      * be thrown, also no wakeups be triggered and no interrupted exception either.
+     * <p>
+     *     仅尝试传输准备发送的请求，不检查任何挂起的请求或元数据错误，
+     * 因此不会抛出任何异常，也不会触发唤醒，也不会抛出中断异常。
      */
     public void transmitSends() {
         Timer timer = time.timer(0);
 
         // do not try to handle any disconnects, prev request failures, metadata exception etc;
         // just try once and return immediately
+        // 不处理任何断开连接、先前请求失败、元数据异常等；
+        // 只尝试一次并立即返回
         lock.lock();
         try {
             // send all the requests we can send now
+            // 尝试发送所有可以发送的请求
             trySend(timer.currentTimeMs());
 
+            // 立即返回，不等待
             client.poll(0, timer.currentTimeMs());
         } finally {
             lock.unlock();
@@ -406,11 +435,17 @@ public class ConsumerNetworkClient implements Closeable {
     /**
      * Check whether there is pending request. This includes both requests that
      * have been transmitted (i.e. in-flight requests) and those which are awaiting transmission.
-     * @return A boolean indicating whether there is pending request
+     * <p>
+     *     检查是否有挂起的请求。这包括已经发送的请求（即正在进行的请求）和等待发送的请求。
+     *
+     * @return 一个布尔值，表示是否有挂起的请求
      */
     public boolean hasPendingRequests() {
+        // 检查是否有挂起的请求
         if (unsent.hasRequests())
             return true;
+
+        // 检查是否有正在进行的请求
         lock.lock();
         try {
             return client.hasInFlightRequests();
@@ -463,11 +498,15 @@ public class ConsumerNetworkClient implements Closeable {
         lock.lock();
         try {
             while (true) {
+                // 从 pendingDisconnects 队列中获取节点
                 Node node = pendingDisconnects.poll();
+                // 如果节点为空，则退出循环
                 if (node == null)
                     break;
 
+                // 失败未发送的请求
                 failUnsentRequests(node, DisconnectException.INSTANCE);
+                // 断开与节点的连接
                 client.disconnect(node.idString());
             }
         } finally {
@@ -476,7 +515,9 @@ public class ConsumerNetworkClient implements Closeable {
     }
 
     public void disconnectAsync(Node node) {
+        // 将节点添加到 pendingDisconnects 队列中
         pendingDisconnects.offer(node);
+        // 唤醒 client 线程
         client.wakeup();
     }
 

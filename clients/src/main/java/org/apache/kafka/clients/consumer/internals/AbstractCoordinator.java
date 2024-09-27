@@ -228,20 +228,25 @@ public abstract class AbstractCoordinator implements Closeable {
      * Visible for testing.
      *
      * Ensure that the coordinator is ready to receive requests.
+     * <p>
+     *     确保协调器准备好接收请求。
      *
      * @param timer Timer bounding how long this method can block
      * @return true If coordinator discovery and initial connection succeeded, false otherwise
      */
     protected synchronized boolean ensureCoordinatorReady(final Timer timer) {
+        // 如果协调器已知，则返回 true
         if (!coordinatorUnknown())
             return true;
 
         do {
+            // 如果寻找 coordinator时发生了致命异常，则抛出异常
             if (fatalFindCoordinatorException != null) {
                 final RuntimeException fatalException = fatalFindCoordinatorException;
                 fatalFindCoordinatorException = null;
                 throw fatalException;
             }
+            // 寻找 coordinator
             final RequestFuture<Void> future = lookupCoordinator();
             client.poll(future, timer);
 
@@ -276,13 +281,16 @@ public abstract class AbstractCoordinator implements Closeable {
     }
 
     protected synchronized RequestFuture<Void> lookupCoordinator() {
+        // 如果 findCoordinatorFuture 为空，则寻找 coordinator
         if (findCoordinatorFuture == null) {
             // find a node to ask about the coordinator
+            // 寻找一个节点来询问 coordinator 在哪个节点
             Node node = this.client.leastLoadedNode();
             if (node == null) {
                 log.debug("No broker available to send FindCoordinator request");
                 return RequestFuture.noBrokersAvailable();
             } else {
+                // 发送 FindCoordinator 请求
                 findCoordinatorFuture = sendFindCoordinatorRequest(node);
             }
         }
@@ -324,6 +332,8 @@ public abstract class AbstractCoordinator implements Closeable {
             if (heartbeatThread.hasFailed()) {
                 // set the heartbeat thread to null and raise an exception. If the user catches it,
                 // the next call to ensureActiveGroup() will spawn a new heartbeat thread.
+                // 将心跳线程设置为 null 并抛出异常。
+                // 如果用户捕获了它，下一次调用 ensureActiveGroup() 将生成一个新的心跳线程。
                 RuntimeException cause = heartbeatThread.failureCause();
                 heartbeatThread = null;
                 throw cause;
@@ -356,6 +366,8 @@ public abstract class AbstractCoordinator implements Closeable {
 
     /**
      * Ensure the group is active (i.e., joined and synced)
+     * <p>
+     *     确保组是活动的（即已加入并已同步）
      *
      * @param timer Timer bounding how long this method can block
      * @throws KafkaException if the callback throws exception
@@ -816,15 +828,22 @@ public abstract class AbstractCoordinator implements Closeable {
     /**
      * Discover the current coordinator for the group. Sends a GroupMetadata request to
      * one of the brokers. The returned future should be polled to get the result of the request.
+     * <p>
+     *     发现 group 的当前 coordinator。向其中一个 broker 发送 GroupMetadata 请求。
+     *     返回的 future 应该被轮询以获取请求的结果。
+     *
      * @return A request future which indicates the completion of the metadata request
      */
     private RequestFuture<Void> sendFindCoordinatorRequest(Node node) {
         // initiate the group metadata request
         log.debug("Sending FindCoordinator request to broker {}", node);
+        // 构造 FindCoordinatorRequestData
         FindCoordinatorRequestData data = new FindCoordinatorRequestData()
                 .setKeyType(CoordinatorType.GROUP.id())
                 .setKey(this.rebalanceConfig.groupId);
+        // 构造 FindCoordinatorRequest.Builder
         FindCoordinatorRequest.Builder requestBuilder = new FindCoordinatorRequest.Builder(data);
+        // 发送 FindCoordinator 请求，并且注册一个 FindCoordinatorResponseHandler 处理器作为回调
         return client.send(node, requestBuilder)
                 .compose(new FindCoordinatorResponseHandler());
     }
@@ -835,31 +854,45 @@ public abstract class AbstractCoordinator implements Closeable {
         public void onSuccess(ClientResponse resp, RequestFuture<Void> future) {
             log.debug("Received FindCoordinator response {}", resp);
 
+            // 获取 coordinators 列表
             List<Coordinator> coordinators = ((FindCoordinatorResponse) resp.responseBody()).coordinators();
+            // 如果 coordinators 列表的大小不为 1，则抛出异常
             if (coordinators.size() != 1) {
                 log.error("Group coordinator lookup failed: Invalid response containing more than a single coordinator");
                 future.raise(new IllegalStateException("Group coordinator lookup failed: Invalid response containing more than a single coordinator"));
             }
+            // 获取 coordinator 数据
             Coordinator coordinatorData = coordinators.get(0);
+            // 获取错误码
             Errors error = Errors.forCode(coordinatorData.errorCode());
+            // 如果错误码为 NONE，则表示成功找到 coordinator
             if (error == Errors.NONE) {
                 synchronized (AbstractCoordinator.this) {
                     // use MAX_VALUE - node.id as the coordinator id to allow separate connections
                     // for the coordinator in the underlying network client layer
+                    // 使用 Integer.MAX_VALUE - node.id 作为 coordinator id，以允许在底层网络客户端层中为 coordinator 使用单独的连接
                     int coordinatorConnectionId = Integer.MAX_VALUE - coordinatorData.nodeId();
 
+                    // 创建一个新的 Node 对象，表示 coordinator
                     AbstractCoordinator.this.coordinator = new Node(
                             coordinatorConnectionId,
                             coordinatorData.host(),
                             coordinatorData.port());
                     log.info("Discovered group coordinator {}", coordinator);
+
+                    // 尝试连接 coordinator
                     client.tryConnect(coordinator);
+
+                    // 重置 session 超时时间
                     heartbeat.resetSessionTimeout();
                 }
                 future.complete(null);
+
+                // 如果错误码为 GROUP_AUTHORIZATION_FAILED，则抛出 GroupAuthorizationException 异常
             } else if (error == Errors.GROUP_AUTHORIZATION_FAILED) {
                 future.raise(GroupAuthorizationException.forGroupId(rebalanceConfig.groupId));
             } else {
+                // 如果错误码不为 NONE 或 GROUP_AUTHORIZATION_FAILED，则抛出异常
                 log.debug("Group coordinator lookup failed: {}", coordinatorData.errorMessage());
                 future.raise(error);
             }
@@ -899,6 +932,7 @@ public abstract class AbstractCoordinator implements Closeable {
      */
     protected synchronized Node checkAndGetCoordinator() {
         if (coordinator != null && client.isUnavailable(coordinator)) {
+            // 标记 coordinator 未知
             markCoordinatorUnknown(true, "coordinator unavailable");
             return null;
         }
@@ -928,10 +962,14 @@ public abstract class AbstractCoordinator implements Closeable {
             // Mark the coordinator dead before disconnecting requests since the callbacks for any pending
             // requests may attempt to do likewise. This also prevents new requests from being sent to the
             // coordinator while the disconnect is in progress.
+            // 在断开连接请求之前标记 coordinator 死亡，因为任何挂起的请求的回调可能也会这样做。
+            // 这也阻止了在断开连接期间向 coordinator 发送新请求。
             this.coordinator = null;
 
             // Disconnect from the coordinator to ensure that there are no in-flight requests remaining.
             // Pending callbacks will be invoked with a DisconnectException on the next call to poll.
+            // 断开与 coordinator 的连接，以确保没有剩余的未完成请求。
+            // 挂起的回调将在下次调用 poll 时使用 DisconnectException 调用。
             if (!isDisconnected)
                 client.disconnectAsync(oldCoordinator);
 
@@ -959,6 +997,8 @@ public abstract class AbstractCoordinator implements Closeable {
 
     /**
      * Get the current generation state if the group is stable, otherwise return null
+     * <p>
+     *     如果 group 是稳定的，则返回当前的 generation 状态，否则返回 null
      *
      * @return the current generation or null
      */

@@ -203,6 +203,7 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
      */
     public <S> RequestFuture<S> compose(final RequestFutureAdapter<T, S> adapter) {
         final RequestFuture<S> adapted = new RequestFuture<>();
+        // 将入参 adaptor 封装为一个 RequestFutureListener
         addListener(new RequestFutureListener<T>() {
             @Override
             public void onSuccess(T value) {
