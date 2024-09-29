@@ -53,6 +53,9 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
 
     /**
      * Check whether the response is ready to be handled
+     * <p>
+     *     检查响应是否准备好处理
+     *
      * @return true if the response is ready, false otherwise
      */
     public boolean isDone() {
@@ -65,13 +68,18 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
 
     /**
      * Get the value corresponding to this request (only available if the request succeeded)
+     * <p>
+     *     获取与此请求对应的值（仅在请求成功时可用）
+     *
      * @return the value set in {@link #complete(Object)}
      * @throws IllegalStateException if the future is not complete or failed
      */
     @SuppressWarnings("unchecked")
     public T value() {
+        // 如果此时 future 尚未完成，则抛出异常
         if (!succeeded())
             throw new IllegalStateException("Attempt to retrieve value from future which hasn't successfully completed");
+        // 返回结果
         return (T) result.get();
     }
 
@@ -94,6 +102,9 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
     /**
      * Check if the request is retriable (convenience method for checking if
      * the exception is an instance of {@link RetriableException}.
+     * <p>
+     *     检查请求是否可重试（用于检查异常是否是 {@link RetriableException} 的实例的便利方法）
+     *
      * @return true if it is retriable, false otherwise
      * @throws IllegalStateException if the future is not complete or completed successfully
      */
@@ -103,6 +114,9 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
 
     /**
      * Get the exception from a failed result (only available if the request failed)
+     * <p>
+     *     从失败的结果中获取异常（仅在请求失败时可用）
+     *
      * @return the exception set in {@link #raise(RuntimeException)}
      * @throws IllegalStateException if the future is not complete or completed successfully
      */
@@ -115,6 +129,10 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
     /**
      * Complete the request successfully. After this call, {@link #succeeded()} will return true
      * and the value can be obtained through {@link #value()}.
+     * <p>
+     *     成功完成请求。
+     *     调用此方法后，{@link #succeeded()} 将返回 true，并且可以通过 {@link #value()} 获取值。
+     *
      * @param value corresponding value (or null if there is none)
      * @throws IllegalStateException if the future has already been completed
      * @throws IllegalArgumentException if the argument is an instance of {@link RuntimeException}
@@ -124,8 +142,10 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
             if (value instanceof RuntimeException)
                 throw new IllegalArgumentException("The argument to complete can not be an instance of RuntimeException");
 
+            // cas 操作，将 INCOMPLETE_SENTINEL 替换为 value
             if (!result.compareAndSet(INCOMPLETE_SENTINEL, value))
                 throw new IllegalStateException("Invalid attempt to complete a request future which is already complete");
+            // 触发成功事件
             fireSuccess();
         } finally {
             completedLatch.countDown();
@@ -135,6 +155,10 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
     /**
      * Raise an exception. The request will be marked as failed, and the caller can either
      * handle the exception or throw it.
+     * <p>
+     *     引发异常。
+     *     请求将被标记为失败，调用者可以处理异常或抛出异常。
+     *
      * @param e corresponding exception to be passed to caller
      * @throws IllegalStateException if the future has already been completed
      */
