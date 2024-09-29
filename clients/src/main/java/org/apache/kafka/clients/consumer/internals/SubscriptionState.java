@@ -116,6 +116,7 @@ public class SubscriptionState {
     /* 消费者组已订阅的 topic 列表。
     对于 group leader，这可能包括一些不属于 `subscription` 的主题，
     因为它负责检测需要组再平衡的 metadata 更新。 */
+    // 只有 subscriptionType 为 AUTO_TOPICS 或 AUTO_PATTERN 时，groupSubscription 才可能会有值。
     private Set<String> groupSubscription;
 
     /* User-provided listener to be invoked when assignment changes */
@@ -394,18 +395,19 @@ public class SubscriptionState {
         if (!this.hasAutoAssignedPartitions())
             throw new IllegalArgumentException("Attempt to dynamically assign partitions while manual assignment in use");
 
-        // 创建分区状态映射
+        // 基于入参 assign 的 partition 封装得到一个 map
         Map<TopicPartition, TopicPartitionState> assignedPartitionStates = new HashMap<>(assignments.size());
         for (TopicPartition tp : assignments) {
             TopicPartitionState state = this.assignment.stateValue(tp);
             if (state == null)
                 state = new TopicPartitionState();
-            // 将分区状态添加到分区状态映射中
+            // 将 partitionState 添加到 map 中，如果 partition 之前已经被分配过，那么这里不会覆盖之前的状态
             assignedPartitionStates.put(tp, state);
         }
 
         // 更新分配
         assignmentId++;
+        // 将计算后的 map 设置到 assignment 中，即覆盖之前的分配
         this.assignment.set(assignedPartitionStates);
     }
 
@@ -425,16 +427,22 @@ public class SubscriptionState {
         return this.subscriptionType == SubscriptionType.AUTO_PATTERN;
     }
 
+    /**
+     * 检查是否尚未进行任何订阅、assign 行为
+     *
+     * @return
+     */
     public synchronized boolean hasNoSubscriptionOrUserAssignment() {
         return this.subscriptionType == SubscriptionType.NONE;
     }
 
     public synchronized void unsubscribe() {
+        // 注意：如果需要更换 subscribe 的订阅类型，那么可以先 unsubscribe，然后再 subscribe（另一种模式）
         // 清空订阅的 topic 列表
         this.subscription = Collections.emptySet();
         // 清空 group 订阅的 topic 列表
         this.groupSubscription = Collections.emptySet();
-        // 清空分配
+        // 清空分配的 partition 列表
         this.assignment.clear();
         // 清空订阅的 pattern
         this.subscribedPattern = null;
@@ -452,6 +460,7 @@ public class SubscriptionState {
      * @return 如果使用 pattern 订阅且 topic 匹配订阅的 pattern，则返回 true，否则返回 false
      */
     synchronized boolean matchesSubscribedPattern(String topic) {
+        // 由 ConsumerCoordinator 和 ConsumerMetadata 调用
         // 获取订阅的 pattern
         Pattern pattern = this.subscribedPattern;
         // 如果使用 pattern 订阅且 pattern 不为 null，则检查 topic 是否匹配 pattern
@@ -466,10 +475,10 @@ public class SubscriptionState {
      * @return 如果使用自动分配的分区，则返回订阅的 topic 列表，否则返回空集合
      */
     public synchronized Set<String> subscription() {
-        // 如果使用自动分配的分区，则返回订阅的 topic 列表
+        // 如果是自动分配的（AUTO_TOPIC，AUTO_PATTERN），则返回订阅的 topic 列表
         if (hasAutoAssignedPartitions())
             return this.subscription;
-        // 否则，返回空集合
+        // 否则，说明是手动分配的，返回空集合
         return Collections.emptySet();
     }
 
@@ -500,19 +509,19 @@ public class SubscriptionState {
      *         否则返回 {@link #subscription()} 的相同集合
      */
     synchronized Set<String> metadataTopics() {
-        // 如果 group 订阅为空，则返回订阅的 topic 列表
+        // 如果 groupSubscription 为空，则返回订阅的 topic 列表
         if (groupSubscription.isEmpty())
             return subscription;
+
         // 如果 group 订阅包含所有订阅的 topic，则返回 group 订阅
         else if (groupSubscription.containsAll(subscription))
             return groupSubscription;
+
+            // 否则，说明 groupSubscription 和 subscription 有交集，但是也有不同的 topic
         else {
-            // 当订阅改变时，`groupSubscription` 可能过时，确保返回新的订阅 topic。
-            // 创建一个新的集合，包含 group 订阅和订阅的 topic
+            // 取并集
             Set<String> topics = new HashSet<>(groupSubscription);
-            // 将订阅的 topic 添加到集合中
             topics.addAll(subscription);
-            // 返回包含所有订阅 topic 的集合
             return topics;
         }
     }
@@ -602,9 +611,11 @@ public class SubscriptionState {
     // Visible for testing
     public synchronized List<TopicPartition> fetchablePartitions(Predicate<TopicPartition> isAvailable) {
         // Since this is in the hot-path for fetching, we do this instead of using java.util.stream API
+        // 因为这是获取的热点路径，所以我们这样做，而不是使用 java.util.stream API
         List<TopicPartition> result = new ArrayList<>();
         assignment.forEach((topicPartition, topicPartitionState) -> {
             // Cheap check is first to avoid evaluating the predicate if possible
+            // 首先进行廉价检查，以尽可能避免评估谓词
             if (topicPartitionState.isFetchable() && isAvailable.test(topicPartition)) {
                 result.add(topicPartition);
             }
@@ -617,7 +628,14 @@ public class SubscriptionState {
             this.subscriptionType == SubscriptionType.AUTO_PATTERN;
     }
 
+    /**
+     * 直接设置分区的消费位置。
+     *
+     * @param tp
+     * @param position
+     */
     public synchronized void position(TopicPartition tp, FetchPosition position) {
+        // 由 Fetcher 调用
         assignedState(tp).position(position);
     }
 
@@ -636,17 +654,18 @@ public class SubscriptionState {
     public synchronized boolean maybeValidatePositionForCurrentLeader(ApiVersions apiVersions,
                                                                       TopicPartition tp,
                                                                       Metadata.LeaderAndEpoch leaderAndEpoch) {
+        // 这个方法由 Fetcher 调用
         // 如果 leader 存在
         if (leaderAndEpoch.leader.isPresent()) {
             // 获取到 leader 的 API 版本
             NodeApiVersions nodeApiVersions = apiVersions.get(leaderAndEpoch.leader.get().idString());
             // 如果 leader 的 API 版本为空或 leader 支持 OffsetsForLeaderEpoch API 的版本
             if (nodeApiVersions == null || hasUsableOffsetForLeaderEpochVersion(nodeApiVersions)) {
-                // 进入偏移量验证状态
+                // 验证偏移量
                 return assignedState(tp).maybeValidatePosition(leaderAndEpoch);
             } else {
                 // If the broker does not support a newer version of OffsetsForLeaderEpoch, we skip validation
-                // 如果 broker 不支持更新版本的 OffsetsForLeaderEpoch，则跳过验证
+                // 如果 broker 不支持更新版本的 OffsetsForLeaderEpoch，则跳过验证；直接根据 leaderAndEpoch 更新
                 assignedState(tp).updatePositionLeaderNoValidation(leaderAndEpoch);
                 return false;
             }
@@ -675,44 +694,54 @@ public class SubscriptionState {
                                                                         EpochEndOffset epochEndOffset) {
         // 获取分区的状态
         TopicPartitionState state = assignedStateOrNull(tp);
+
+        // 如果分区状态为空，记录调试日志并跳过验证
         if (state == null) {
-            // 如果分区状态为空，记录调试日志并跳过验证
             log.debug("Skipping completed validation for partition {} which is not currently assigned.", tp);
-        } else if (!state.awaitingValidation()) {
+
             // 如果分区不再等待验证，记录调试日志并跳过验证
+        } else if (!state.awaitingValidation()) {
             log.debug("Skipping completed validation for partition {} which is no longer expecting validation.", tp);
+
+            // 否则，继续验证
         } else {
             // 获取当前的 FetchPosition
             SubscriptionState.FetchPosition currentPosition = state.position;
+
+            // 如果 currentPosition 与入参的 requestPosition 不匹配，记录调试日志并跳过验证
             if (!currentPosition.equals(requestPosition)) {
-                // 如果当前的 FetchPosition 与请求时的 FetchPosition 不匹配，记录调试日志并跳过验证
                 log.debug("Skipping completed validation for partition {} since the current position {} " +
                           "no longer matches the position {} when the request was sent",
                           tp, currentPosition, requestPosition);
+
+                // 如果 epochEndOffset 的 endOffset 或 leaderEpoch 未定义
             } else if (epochEndOffset.endOffset() == UNDEFINED_EPOCH_OFFSET ||
                         epochEndOffset.leaderEpoch() == UNDEFINED_EPOCH) {
-                // 如果 epochEndOffset 的 endOffset 或 leaderEpoch 未定义
+                // 如果存在默认的 offset 重置策略，记录信息日志并重置偏移量
                 if (hasDefaultOffsetResetPolicy()) {
-                    // 如果存在默认的 offset 重置策略，记录信息日志并重置偏移量
                     log.info("Truncation detected for partition {} at offset {}, resetting offset",
                              tp, currentPosition);
                     requestOffsetReset(tp);
+
+                    // 否则，如果不存在默认的 offset 重置策略，记录警告日志并返回日志截断的详细信息
                 } else {
-                    // 如果不存在默认的 offset 重置策略，记录警告日志并返回日志截断的详细信息
                     log.warn("Truncation detected for partition {} at offset {}, but no reset policy is set",
                              tp, currentPosition);
                     return Optional.of(new LogTruncation(tp, requestPosition, Optional.empty()));
                 }
-            } else if (epochEndOffset.endOffset() < currentPosition.offset) {
+
                 // 如果 epochEndOffset 的 endOffset 小于当前偏移量
+            } else if (epochEndOffset.endOffset() < currentPosition.offset) {
+                // 如果存在默认的 offset 重置策略，记录信息日志并将偏移量重置为第一个已知的偏移量
                 if (hasDefaultOffsetResetPolicy()) {
-                    // 如果存在默认的 offset 重置策略，记录信息日志并将偏移量重置为第一个已知的偏移量
                     SubscriptionState.FetchPosition newPosition = new SubscriptionState.FetchPosition(
                             epochEndOffset.endOffset(), Optional.of(epochEndOffset.leaderEpoch()),
                             currentPosition.currentLeader);
                     log.info("Truncation detected for partition {} at offset {}, resetting offset to " +
                              "the first offset known to diverge {}", tp, currentPosition, newPosition);
                     state.seekValidated(newPosition);
+
+                    // 否则，如果不存在默认的 offset 重置策略，记录警告日志并返回日志截断的详细信息
                 } else {
                     // 如果不存在默认的 offset 重置策略，记录警告日志并返回日志截断的详细信息
                     OffsetAndMetadata divergentOffset = new OffsetAndMetadata(epochEndOffset.endOffset(),
