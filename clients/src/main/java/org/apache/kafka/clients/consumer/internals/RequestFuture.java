@@ -243,6 +243,7 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
     }
 
     public void chain(final RequestFuture<T> future) {
+        // 将多个 future 链接在一起，底层是通过 addListener 来注册监听器
         addListener(new RequestFutureListener<T>() {
             @Override
             public void onSuccess(T value) {

@@ -25,6 +25,8 @@ import org.apache.kafka.common.TopicPartition;
  * A callback interface that the user can implement to trigger custom actions when the set of partitions assigned to the
  * consumer changes.
  * <p>
+ *     用户可以实现的回调接口，用于在分配给消费者的分区集发生变化时触发自定义操作。
+ * <p>
  * This is applicable when the consumer is having Kafka auto-manage group membership. If the consumer directly assigns partitions,
  * those partitions will never be reassigned and this callback is not applicable.
  * <p>

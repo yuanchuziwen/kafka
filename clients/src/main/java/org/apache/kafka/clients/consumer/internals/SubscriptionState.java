@@ -97,6 +97,7 @@ public class SubscriptionState {
 
     /* the type of subscription */
     /* 订阅类型 */
+    // subscriptionType 一旦设置之后，就不能再改变
     private SubscriptionType subscriptionType;
 
     /* the pattern user has requested */
@@ -105,6 +106,8 @@ public class SubscriptionState {
 
     /* the list of topics the user has requested */
     /* 用户请求的主题列表 */
+    // 用户订阅的 topic 集合（注意：是 topic，不是 partition）
+    // subscribe from topic, from pattern, assign from user 都会记录这个集合，即它永远有效
     private Set<String> subscription;
 
     /* The list of topics the group has subscribed to. This may include some topics which are not part
@@ -117,9 +120,12 @@ public class SubscriptionState {
 
     /* User-provided listener to be invoked when assignment changes */
     /* 用户提供的在分配更改时调用的 listener */
+    // 只有在调用 subscribe 方法时才会触发注册，因此如果使用了 assign 方法，那么就不会触发注册
+    // 一般会由 ConsumerCoordinator 来触发回调
     private ConsumerRebalanceListener rebalanceListener;
 
     /* 分配 ID */
+    // 记录了 partition 分配的变化次数
     private int assignmentId = 0;
 
     /**
@@ -204,11 +210,11 @@ public class SubscriptionState {
      * @return 如果订阅成功则返回 true，否则返回 false
      */
     public synchronized boolean subscribe(Set<String> topics, ConsumerRebalanceListener listener) {
-        /* 注册 rebalance listener */
+        // 注册 rebalance listener
         registerRebalanceListener(listener);
-        /* 设置订阅类型为 AUTO_TOPICS */
+        // 设置订阅类型为 AUTO_TOPICS
         setSubscriptionType(SubscriptionType.AUTO_TOPICS);
-        /* 改变订阅 */
+        // 改变订阅的 topic 集合
         return changeSubscription(topics);
     }
 
@@ -219,15 +225,25 @@ public class SubscriptionState {
      * @param listener 在分配更改时调用的 listener
      */
     public synchronized void subscribe(Pattern pattern, ConsumerRebalanceListener listener) {
-        /* 注册 rebalance listener */
+        // 注册 rebalance listener
         registerRebalanceListener(listener);
-        /* 设置订阅类型为 AUTO_PATTERN */
+        // 设置订阅类型为 AUTO_PATTERN
         setSubscriptionType(SubscriptionType.AUTO_PATTERN);
-        /* 设置订阅的 pattern */
+        // 设置订阅的 pattern
+        // 注意：这里只会记录 pattern，而不会触发针对实际的 topic 的订阅
+        // 基于 pattern 得到对应的 topic 集合是在 ConsumerCoordinator 中完成的，他会调用 subscribeFromPattern 方法
         this.subscribedPattern = pattern;
     }
 
+    /**
+     * 基于订阅的 pattern 订阅 topic。
+     * 这个方法会由 ConsumerCoordinator 调用。
+     *
+     * @param topics
+     * @return
+     */
     public synchronized boolean subscribeFromPattern(Set<String> topics) {
+        // 校验此时的订阅类型必须为 AUTO_PATTERN
         if (subscriptionType != SubscriptionType.AUTO_PATTERN)
             throw new IllegalArgumentException("Attempt to subscribe from pattern while subscription type set to " +
                     subscriptionType);
@@ -255,7 +271,7 @@ public class SubscriptionState {
      * Set the current group subscription. This is used by the group leader to ensure
      * that it receives metadata updates for all topics that the group is interested in.
      * <p>
-     *     设置当前的 group 订阅。
+     *     设置当前的 group subscription。
      *     这由 group leader 调用，以确保接收所有 group 感兴趣的 topic 的 metadata 更新。
      *
      * @param topics All topics from the group subscription
@@ -264,10 +280,11 @@ public class SubscriptionState {
      *        如果 group 订阅包含本地订阅中不存在的 topic，则返回 true
      */
     synchronized boolean groupSubscribe(Collection<String> topics) {
-        // 如果当前没有自动分配的分区，则抛出异常，即 state 不是 AUTO_TOPICS 或 AUTO_PATTERN
+        // 注意：这个方法由 ConsumerCoordinator 调用
+        // 校验此时的订阅类型必须为 AUTO_TOPICS 或 AUTO_PATTERN
         if (!hasAutoAssignedPartitions())
             throw new IllegalStateException(SUBSCRIPTION_EXCEPTION_MESSAGE);
-        // 更新 group 订阅
+        // 更新 groupSubscription
         groupSubscription = new HashSet<>(topics);
         return !subscription.containsAll(groupSubscription);
     }
@@ -294,34 +311,38 @@ public class SubscriptionState {
      * @return 如果分配成功则返回 true，否则返回 false
      */
     public synchronized boolean assignFromUser(Set<TopicPartition> partitions) {
+        // 注意：这个方法只由 kafkaConsumer 调用，即由用户直接调用
         // 设置订阅类型为 USER_ASSIGNED
         setSubscriptionType(SubscriptionType.USER_ASSIGNED);
 
-        // 如果当前分配的分区与要分配的分区相同，则返回 false
+        // 如果当前已分配的 partition 与入参的 partition 相同，则返回 false
         if (this.assignment.partitionSet().equals(partitions))
             return false;
 
-        // 更新分配 ID
+        // 更新 assignmentId
         assignmentId++;
 
-        // 更新订阅的 topic
+        // 准备更新成员变量的 assignment 和 subscription 集合
         Set<String> manualSubscribedTopics = new HashSet<>();
         Map<TopicPartition, TopicPartitionState> partitionToState = new HashMap<>();
+
+        // 遍历每一个入参中传入的 partition
         for (TopicPartition partition : partitions) {
-            // 获取分区状态
+            // 获取此时这个 partition 在订阅状态集合中的状态，可以通过这种方式判断，这个 partition 是否已经被分配
             TopicPartitionState state = assignment.stateValue(partition);
-            // 如果分区状态为 null，则创建一个新的分区状态
+            // 如果分区状态为 null，说明这个分区之前没有被分配，则创建一个新的 TopicPartitionState
             if (state == null)
                 state = new TopicPartitionState();
-            // 将分区状态添加到分区状态映射中
+
+            // 将 TopicPartitionState 添加到 partitionToState map 中
+            // 注意，如果 partition 之前已经被分配过，那么这里不会覆盖之前的状态；因为用的是同一个 partition 对象
             partitionToState.put(partition, state);
-            // 将分区 topic 添加到手动订阅的 topic 列表中
+            // 记录这个 partition 对应的 topic
             manualSubscribedTopics.add(partition.topic());
         }
 
-        // 更新分配 
+        // 更新成员变量的 assignment 和 subscription 集合
         this.assignment.set(partitionToState);
-        // 更新订阅的 topic
         return changeSubscription(manualSubscribedTopics);
     }
 
@@ -330,10 +351,12 @@ public class SubscriptionState {
      * 检查分配是否匹配订阅
      */
     public synchronized boolean checkAssignmentMatchedSubscription(Collection<TopicPartition> assignments) {
+        // 注意：这个方法只由 ConsumerCoordinator 调用
+        // 校验 assignments 对应的分区匹配订阅的 topic 或 pattern
         for (TopicPartition topicPartition : assignments) {
-            // 如果是以 pattern 订阅
+            // 如果 subscribedPattern 不为 null，则说明使用 pattern 订阅
             if (this.subscribedPattern != null) {
-                // 检查分区 topic 是否匹配订阅的 pattern
+                // 检查入参的分区的 topic 是否匹配订阅的 pattern
                 if (!this.subscribedPattern.matcher(topicPartition.topic()).matches()) {
                     log.info("Assigned partition {} for non-subscribed topic regex pattern; subscription pattern is {}",
                         topicPartition,
@@ -342,9 +365,9 @@ public class SubscriptionState {
                     return false;
                 }
 
-                // 如果是以 topic 订阅
+                // 否则，说明 pattern 为 null，即可能是 AUTO_TOPICS 或 USER_ASSIGNED
             } else {
-                // 检查分区 topic 是否在订阅的 topic 列表中
+                // 检查入参的分区的 topic 是否在 subscribe 的 分区中
                 if (!this.subscription.contains(topicPartition.topic())) {
                     log.info("Assigned partition {} for non-subscribed topic; subscription is {}", topicPartition, this.subscription);
 
