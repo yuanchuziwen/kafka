@@ -97,7 +97,7 @@ public class SubscriptionState {
 
     /* the type of subscription */
     /* 订阅类型 */
-    // subscriptionType 一旦设置之后，就不能再改变
+    // subscriptionType 一旦设置之后，就不能再改变（可以先 unsubscribe 清空，然后再使用另一种方式的 subscribe）
     private SubscriptionType subscriptionType;
 
     /* the pattern user has requested */
@@ -117,6 +117,7 @@ public class SubscriptionState {
     对于 group leader，这可能包括一些不属于 `subscription` 的主题，
     因为它负责检测需要组再平衡的 metadata 更新。 */
     // 只有 subscriptionType 为 AUTO_TOPICS 或 AUTO_PATTERN 时，groupSubscription 才可能会有值。
+    // leader 使用这个集合来记录同组内所有消费者订阅的 topic；而其他消费者则只感知自身订阅的 topic
     private Set<String> groupSubscription;
 
     /* User-provided listener to be invoked when assignment changes */

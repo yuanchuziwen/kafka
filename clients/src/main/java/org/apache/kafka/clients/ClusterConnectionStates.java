@@ -323,7 +323,9 @@ final class ClusterConnectionStates {
      * @param id The id of the node to check
      */
     public boolean isDisconnected(String id) {
+        // 获取 client 和指定 id 的 node 之间的连接状态
         NodeConnectionState state = nodeState.get(id);
+        // 根据状态判断是否已经断开连接
         return state != null && state.state.isDisconnected();
     }
 

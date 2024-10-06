@@ -18,6 +18,8 @@ package org.apache.kafka.clients.consumer.internals;
 
 /**
  * Adapt from a request future of one type to another.
+ * <p>
+ *     将一个类型的请求 future 适配到另一个类型
  *
  * @param <F> Type to adapt from
  * @param <T> Type to adapt to

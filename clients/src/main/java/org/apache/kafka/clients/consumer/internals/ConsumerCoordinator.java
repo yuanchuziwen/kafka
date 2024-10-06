@@ -139,6 +139,8 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
     /**
      * Initialize the coordination manager.
+     * <p>
+     *     初始化 coordination manager。
      */
     public ConsumerCoordinator(GroupRebalanceConfig rebalanceConfig,
                                LogContext logContext,
@@ -153,12 +155,14 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                                int autoCommitIntervalMs,
                                ConsumerInterceptors<?, ?> interceptors,
                                boolean throwOnFetchStableOffsetsUnsupported) {
+        // 先嗲用父类 AbstractCoordinator 的构造方法
         super(rebalanceConfig,
               logContext,
               client,
               metrics,
               metricGrpPrefix,
               time);
+        // 初始化一些属性
         this.rebalanceConfig = rebalanceConfig;
         this.log = logContext.logger(ConsumerCoordinator.class);
         this.metadata = metadata;

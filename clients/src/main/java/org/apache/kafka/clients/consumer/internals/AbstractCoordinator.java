@@ -84,8 +84,14 @@ import java.util.concurrent.atomic.AtomicReference;
  * AbstractCoordinator implements group management for a single group member by interacting with
  * a designated Kafka broker (the coordinator). Group semantics are provided by extending this class.
  * See {@link ConsumerCoordinator} for example usage.
+ * <p>
+ * AbstractCoordinator 实现了通过与指定的 Kafka broker（协调器）交互来管理单个组成员的组管理。
+ * 组语义通过扩展此类提供。
+ * 参见 {@link ConsumerCoordinator} 以获取示例用法。
  *
  * From a high level, Kafka's group management protocol consists of the following sequence of actions:
+ * <p>
+ * 从高层次来看，Kafka 的组管理协议由以下一系列操作组语义通过扩展此类提供。
  *
  * <ol>
  *     <li>Group Registration: Group members register with the coordinator providing their own metadata
@@ -96,59 +102,101 @@ import java.util.concurrent.atomic.AtomicReference;
  *         assigns state.</li>
  *     <li>Group Stabilization: Each member receives the state assigned by the leader and begins
  *         processing.</li>
+ *     <li>Group Registration：组成员向协调器注册，提供他们自己的元数据（例如他们感兴趣的主题集合）。</li>
+ *     <li>Group/Leader Selection：协调器选择组的成员并选择一个成员作为领导者。</li>
+ *     <li>State Assignment：领导者收集所有组成员的元数据并分配状态。</li>
+ *     <li>Group Stabilization：每个成员接收领导者分配的状态并开始处理。</li>
  * </ol>
  *
  * To leverage this protocol, an implementation must define the format of metadata provided by each
  * member for group registration in {@link #metadata()} and the format of the state assignment provided
  * by the leader in {@link #performAssignment(String, String, List)} and becomes available to members in
  * {@link #onJoinComplete(int, String, String, ByteBuffer)}.
+ * <p>
+ * 为了利用此协议，实现必须定义每个成员在 {@link #metadata()} 中提供的组注册元数据的格式，以及领导者在
+ * {@link #performAssignment(String, String, List)} 中提供的状态分配格式，
+ * 并在 {@link #onJoinComplete(int, String, String, ByteBuffer)} 中变得对成员可用。
  *
  * Note on locking: this class shares state between the caller and a background thread which is
  * used for sending heartbeats after the client has joined the group. All mutable state as well as
  * state transitions are protected with the class's monitor. Generally this means acquiring the lock
  * before reading or writing the state of the group (e.g. generation, memberId) and holding the lock
  * when sending a request that affects the state of the group (e.g. JoinGroup, LeaveGroup).
+ * <p>
+ * 关于锁定：此类在调用者和后台线程之间共享状态，后台线程用于在客户端加入组后发送心跳。
+ * 所有可变状态以及状态转换都受到类的监视器保护。
+ * 通常，这意味着在读取或写入组的状态（例如 generation, memberId）之前获取锁，并在发送影响组状态的请求（例如 JoinGroup, LeaveGroup）时持有锁。
  */
 public abstract class AbstractCoordinator implements Closeable {
+    // 心跳线程的命名前缀
     public static final String HEARTBEAT_THREAD_PREFIX = "kafka-coordinator-heartbeat-thread";
+    // 加入组超时时间
     public static final int JOIN_GROUP_TIMEOUT_LAPSE = 5000;
 
+    // 成员状态
     protected enum MemberState {
+        // 客户端不是组的一部分
         UNJOINED,             // the client is not part of a group
+        // 客户端已发送加入组请求，但未收到响应
         PREPARING_REBALANCE,  // the client has sent the join group request, but have not received response
+        // 客户端已收到加入组响应，但未收到分配
         COMPLETING_REBALANCE, // the client has received join group response, but have not received assignment
+        // 客户端已加入并发送心跳
         STABLE;               // the client has joined and is sending heartbeats
 
+        /**
+         * 判断 client 是否未加入组
+         * @return
+         */
         public boolean hasNotJoinedGroup() {
             return equals(UNJOINED) || equals(PREPARING_REBALANCE);
         }
     }
 
+    // 日志记录器
     private final Logger log;
+    // 心跳管理器，它管理着心跳相关的标记位、时间等；
     private final Heartbeat heartbeat;
+    // 组协调器指标
     private final GroupCoordinatorMetrics sensors;
+    // 组再平衡配置
     private final GroupRebalanceConfig rebalanceConfig;
 
+    // 时间管理器
     protected final Time time;
+    // 消费者网络客户端
     protected final ConsumerNetworkClient client;
 
+    // 协调器所在的节点
     private Node coordinator = null;
+    // 是否需要重新加入组
     private boolean rejoinNeeded = true;
+    // 是否需要准备加入组
     private boolean needsJoinPrepare = true;
+    // 心跳线程
     private HeartbeatThread heartbeatThread = null;
+    // 加入组请求的结果
     private RequestFuture<ByteBuffer> joinFuture = null;
+    // 查找协调器请求的结果
     private RequestFuture<Void> findCoordinatorFuture = null;
+    // 查找协调器时发生的致命异常
     private volatile RuntimeException fatalFindCoordinatorException = null;
+    // 当前的 generation 信息
     private Generation generation = Generation.NO_GENERATION;
+    // 上次再平衡开始的时间戳
     private long lastRebalanceStartMs = -1L;
+    // 上次再平衡结束的时间戳
     private long lastRebalanceEndMs = -1L;
+    // 上次连接的时间戳（仅在无法连接一段时间后开始记录警告）
     private long lastTimeOfConnectionMs = -1L; // starting logging a warning only after unable to connect for a while
-
+    // 成员状态
     protected MemberState state = MemberState.UNJOINED;
 
 
     /**
      * Initialize the coordination manager.
+     * <p>
+     *     初始化协调管理器。
      */
     public AbstractCoordinator(GroupRebalanceConfig rebalanceConfig,
                                LogContext logContext,
@@ -162,12 +210,16 @@ public abstract class AbstractCoordinator implements Closeable {
         this.log = logContext.logger(this.getClass());
         this.client = client;
         this.time = time;
+        // 初始化心跳配置
         this.heartbeat = new Heartbeat(rebalanceConfig, time);
         this.sensors = new GroupCoordinatorMetrics(metrics, metricGrpPrefix);
     }
 
     /**
      * Unique identifier for the class of supported protocols (e.g. "consumer" or "connect").
+     * <p>
+     *     支持的协议类的唯一标识符（例如 "consumer" 或 "connect"）。
+     *
      * @return Non-null protocol type name
      */
     protected abstract String protocolType();
@@ -179,6 +231,11 @@ public abstract class AbstractCoordinator implements Closeable {
      * preference into account when selecting the generation protocol (generally more preferred
      * protocols will be selected as long as all members support them and there is no disagreement
      * on the preference).
+     * <p>
+     *     获取当前支持的 protocol 及其关联的 metadata 列表。
+     *     protocol 列表中的顺序表示选择的偏好（第一个 protocol 是最受欢迎的）。
+     *     coordinator 在选择生成 protocol 时会考虑这种偏好（只要所有成员支持它们并且没有分歧）。
+     *
      * @return Non-empty map of supported protocols and metadata
      */
     protected abstract JoinGroupRequestData.JoinGroupRequestProtocolCollection metadata();
@@ -186,18 +243,32 @@ public abstract class AbstractCoordinator implements Closeable {
     /**
      * Invoked prior to each group join or rejoin. This is typically used to perform any
      * cleanup from the previous generation (such as committing offsets for the consumer)
+     * <p>
+     *     在每次加入或重新加入组之前调用。
+     *     这通常用于执行任何从上一个 generation 的清理（例如为消费者提交偏移量）。
+     *
      * @param generation The previous generation or -1 if there was none
+     *                   上一个 generation 或 -1（如果没有）
      * @param memberId The identifier of this member in the previous group or "" if there was none
+     *                 上一个组中此成员的标识符，如果没有则为 ""
      */
     protected abstract void onJoinPrepare(int generation, String memberId);
 
     /**
      * Perform assignment for the group. This is used by the leader to push state to all the members
      * of the group (e.g. to push partition assignments in the case of the new consumer)
+     * <p>
+     *     为组执行分配。
+     *     这是由 leader 推送到所有组成员的状态（例如在新的消费者情况下推送分区分配）。
+     *
      * @param leaderId The id of the leader (which is this member)
+     *                 领导者（即此成员）的 id
      * @param protocol The protocol selected by the coordinator
+     *                 由 coordinator 选择的 protocol
      * @param allMemberMetadata Metadata from all members of the group
+     *                 组中所有成员的元数据
      * @return A map from each member to their state assignment
+     *         每个成员到其状态分配的映射
      */
     protected abstract Map<String, ByteBuffer> performAssignment(String leaderId,
                                                                  String protocol,
@@ -206,6 +277,9 @@ public abstract class AbstractCoordinator implements Closeable {
     /**
      * Invoked when a group member has successfully joined a group. If this call fails with an exception,
      * then it will be retried using the same assignment state on the next call to {@link #ensureActiveGroup()}.
+     * <p>
+     *     当一个组成员成功加入组时调用。
+     *     如果此调用失败并抛出异常，则将在下一次调用 {@link #ensureActiveGroup()} 时使用相同的分配状态重试。
      *
      * @param generation The generation that was joined
      * @param memberId The identifier for the local member in the group
@@ -221,6 +295,10 @@ public abstract class AbstractCoordinator implements Closeable {
      * Invoked prior to each leave group event. This is typically used to cleanup assigned partitions;
      * note it is triggered by the consumer's API caller thread (i.e. background heartbeat thread would
      * not trigger it even if it tries to force leaving group upon heartbeat session expiration)
+     * <p>
+     *     在每次 leave group event 之前调用。
+     *     这通常用于清理已分配的分区；
+     *     注意，它会由消费者 API 调用者线程触发（也就是说，即使心跳线程尝试在心跳会话过期时强制离开组，也不会触发它）。
      */
     protected void onLeavePrepare() {}
 
@@ -229,10 +307,12 @@ public abstract class AbstractCoordinator implements Closeable {
      *
      * Ensure that the coordinator is ready to receive requests.
      * <p>
-     *     确保协调器准备好接收请求。
+     *     确保 coordinator 已经准备好接收请求。
      *
      * @param timer Timer bounding how long this method can block
+     *              用于限制此方法可以阻塞的时间
      * @return true If coordinator discovery and initial connection succeeded, false otherwise
+     *        如果 coordinator 被发现并且连接成功建立，则返回 true，否则返回 false
      */
     protected synchronized boolean ensureCoordinatorReady(final Timer timer) {
         // 如果协调器已知，则返回 true
@@ -240,31 +320,40 @@ public abstract class AbstractCoordinator implements Closeable {
             return true;
 
         do {
-            // 如果寻找 coordinator时发生了致命异常，则抛出异常
+            // 如果寻找 coordinator 时发生了致命异常，则抛出异常
             if (fatalFindCoordinatorException != null) {
                 final RuntimeException fatalException = fatalFindCoordinatorException;
                 fatalFindCoordinatorException = null;
                 throw fatalException;
             }
-            // 寻找 coordinator
+
+            // 准备发出 lookupCoordinator 请求，这里会构造好请求、回调，并把 Request 放到 selector 的缓冲区
+            // 这里返回一个 future，方便阻塞以及注册监听器
             final RequestFuture<Void> future = lookupCoordinator();
+            // 触发一次 io 操作，发出 lookupCoordinator 请求
+            // 阻塞的逻辑会被放在 poll 里面实现
             client.poll(future, timer);
 
+            // 如果 future 超时且未得到结果（没找到 coordinator，也没报错啥的），就跳出循环
             if (!future.isDone()) {
-                // ran out of time
                 break;
             }
 
             RuntimeException fatalException = null;
-
+            // 如果 future 失败了
             if (future.failed()) {
+                // 如果是可重试的错误，刷新元数据
                 if (future.isRetriable()) {
+                    // 如果是可重试的错误，刷新元数据
                     log.debug("Coordinator discovery failed, refreshing metadata", future.exception());
                     client.awaitMetadataUpdate(timer);
                 } else {
+                    // 如果是致命错误，记录日志并准备抛出异常
                     fatalException = future.exception();
                     log.info("FindCoordinator request hit fatal exception", fatalException);
                 }
+
+                // 否则，如果 coordinator 已知，但是连接失败，标记为未知并等待重试
             } else if (coordinator != null && client.isUnavailable(coordinator)) {
                 // we found the coordinator, but the connection has failed, so mark
                 // it dead and backoff before retrying discovery
@@ -272,25 +361,29 @@ public abstract class AbstractCoordinator implements Closeable {
                 timer.sleep(rebalanceConfig.retryBackoffMs);
             }
 
+            // 清理成员变量 findCoordinatorFuture，设置为 null
             clearFindCoordinatorFuture();
             if (fatalException != null)
                 throw fatalException;
         } while (coordinatorUnknown() && timer.notExpired());
 
+        // 返回协调器是否已知
         return !coordinatorUnknown();
     }
 
     protected synchronized RequestFuture<Void> lookupCoordinator() {
-        // 如果 findCoordinatorFuture 为空，则寻找 coordinator
+        // 如果成员变量 findCoordinatorFuture 为空，则寻找 coordinator；
+        // 否则直接返回 findCoordinatorFuture
         if (findCoordinatorFuture == null) {
             // find a node to ask about the coordinator
-            // 寻找一个节点来询问 coordinator 在哪个节点
+            // 寻找一个负载最低的节点来发请求询问 coordinator 在哪个节点
             Node node = this.client.leastLoadedNode();
+            // 如果 leastLoadedNode 返回 null，则记录日志并返回一个带着异常的 future（内部会抛出异常）
             if (node == null) {
                 log.debug("No broker available to send FindCoordinator request");
                 return RequestFuture.noBrokersAvailable();
             } else {
-                // 发送 FindCoordinator 请求
+                // 准备发送 FindCoordinator 请求，放到 send 缓冲区，并返回一个 future
                 findCoordinatorFuture = sendFindCoordinatorRequest(node);
             }
         }
@@ -304,6 +397,8 @@ public abstract class AbstractCoordinator implements Closeable {
     /**
      * Check whether the group should be rejoined (e.g. if metadata changes) or whether a
      * rejoin request is already in flight and needs to be completed.
+     * <p>
+     *     检查是否应该重新加入组（例如，如果元数据发生变化）或者是否已经有一个重新加入请求在飞行中并需要完成。
      *
      * @return true if it should, false otherwise
      */
@@ -319,9 +414,9 @@ public abstract class AbstractCoordinator implements Closeable {
      * provided rebalance timeout expires without calling this method, then the client will proactively
      * leave the group.
      * <p>
-     * 检查心跳线程的状态（如果它处于活动状态）并指示客户端的活跃性。
+     * 检查心跳线程的状态（如果它处于活动状态）并确认客户端是否存活。
      * 这必须在调用 {@link #ensureActiveGroup()} 之后定期调用，以确保成员保持在组中。
-     * 如果一个时间间隔比提供的重新平衡超时更长的时间没有调用这个方法，那么客户端将主动离开组。
+     * 如果超过 rebalance timeout 指定的时间间隔而没有调用此方法，则客户端将主动离开组。
      *
      * @param now current time in milliseconds
      * @throws RuntimeException for unexpected errors raised from the heartbeat thread
@@ -350,6 +445,7 @@ public abstract class AbstractCoordinator implements Closeable {
     protected synchronized long timeToNextHeartbeat(long now) {
         // if we have not joined the group or we are preparing rebalance,
         // we don't need to send heartbeats
+        // 如果我们还没有加入组或者正在准备再平衡，我们不需要发送心跳
         if (state.hasNotJoinedGroup())
             return Long.MAX_VALUE;
         return heartbeat.timeToNextHeartbeat(now);
@@ -357,8 +453,11 @@ public abstract class AbstractCoordinator implements Closeable {
 
     /**
      * Ensure that the group is active (i.e. joined and synced)
+     * <p>
+     *     确保组是活动的（即已加入并已同步）
      */
     public void ensureActiveGroup() {
+        // 如果 ensureActiveGroup 返回 false，则一直等待直到返回 true
         while (!ensureActiveGroup(time.timer(Long.MAX_VALUE))) {
             log.warn("still waiting to ensure active group");
         }
@@ -370,12 +469,14 @@ public abstract class AbstractCoordinator implements Closeable {
      *     确保组是活动的（即已加入并已同步）
      *
      * @param timer Timer bounding how long this method can block
+     *              用于限制此方法可以阻塞的时间
      * @throws KafkaException if the callback throws exception
      * @return true iff the group is active
      */
     boolean ensureActiveGroup(final Timer timer) {
         // always ensure that the coordinator is ready because we may have been disconnected
         // when sending heartbeats and does not necessarily require us to rejoin the group.
+        // 总是确保协调器已准备好，因为在发送心跳时可能已断开连接，不一定需要我们重新加入组。
         if (!ensureCoordinatorReady(timer)) {
             return false;
         }
@@ -840,24 +941,35 @@ public abstract class AbstractCoordinator implements Closeable {
         log.debug("Sending FindCoordinator request to broker {}", node);
         // 构造 FindCoordinatorRequestData
         FindCoordinatorRequestData data = new FindCoordinatorRequestData()
+                // 这里 keyType 有两种类型：GROUP 和 TRANSACTION，也就是说 FindCoordinatorRequestData 可以用于查找 group coordinator 和 transaction coordinator
                 .setKeyType(CoordinatorType.GROUP.id())
                 .setKey(this.rebalanceConfig.groupId);
         // 构造 FindCoordinatorRequest.Builder
         FindCoordinatorRequest.Builder requestBuilder = new FindCoordinatorRequest.Builder(data);
         // 发送 FindCoordinator 请求，并且注册一个 FindCoordinatorResponseHandler 处理器作为回调
+        // send 得到的 future 是 Future<FindCoordinatorResponse> 类型，而这里要返回一个 Future<Void> 类型，所以需要通过 compose 方法转换一下
         return client.send(node, requestBuilder)
                 .compose(new FindCoordinatorResponseHandler());
     }
 
+    /**
+     * FindCoordinatorResponseHandler 处理器，用于处理 FindCoordinator 请求的响应
+     */
     private class FindCoordinatorResponseHandler extends RequestFutureAdapter<ClientResponse, Void> {
 
+        /**
+         * 处理 FindCoordinator 请求成功的响应
+         * 
+         * @param resp 响应
+         * @param future 请求 future
+         */
         @Override
         public void onSuccess(ClientResponse resp, RequestFuture<Void> future) {
             log.debug("Received FindCoordinator response {}", resp);
 
-            // 获取 coordinators 列表
+            // 从 response 中获取 coordinators 列表
             List<Coordinator> coordinators = ((FindCoordinatorResponse) resp.responseBody()).coordinators();
-            // 如果 coordinators 列表的大小不为 1，则抛出异常
+            // 验证 coordinators 列表的大小为 1
             if (coordinators.size() != 1) {
                 log.error("Group coordinator lookup failed: Invalid response containing more than a single coordinator");
                 future.raise(new IllegalStateException("Group coordinator lookup failed: Invalid response containing more than a single coordinator"));
@@ -866,15 +978,19 @@ public abstract class AbstractCoordinator implements Closeable {
             Coordinator coordinatorData = coordinators.get(0);
             // 获取错误码
             Errors error = Errors.forCode(coordinatorData.errorCode());
+
             // 如果错误码为 NONE，则表示成功找到 coordinator
             if (error == Errors.NONE) {
+                // 锁住当前 AbstractCoordinator 对象
                 synchronized (AbstractCoordinator.this) {
                     // use MAX_VALUE - node.id as the coordinator id to allow separate connections
                     // for the coordinator in the underlying network client layer
+                    // 生成一个 coordinator 连接 id
                     // 使用 Integer.MAX_VALUE - node.id 作为 coordinator id，以允许在底层网络客户端层中为 coordinator 使用单独的连接
                     int coordinatorConnectionId = Integer.MAX_VALUE - coordinatorData.nodeId();
 
                     // 创建一个新的 Node 对象，表示 coordinator
+                    // 这里会直接赋值给成员变量
                     AbstractCoordinator.this.coordinator = new Node(
                             coordinatorConnectionId,
                             coordinatorData.host(),
@@ -927,13 +1043,15 @@ public abstract class AbstractCoordinator implements Closeable {
      * Get the coordinator if its connection is still active. Otherwise mark it unknown and
      * return null.
      * <p>
-     *     如果连接仍然活动，则获取协调员。否则标记为未知并返回 null。
+     *     如果 client 和 coordinator 之间连接仍然处于 active 状态，则获取 coordinator。否则标记为未知并返回 null。
      *
      * @return the current coordinator or null if it is unknown
+     *          返回当前的 coordinator，如果未知则返回 null
      */
     protected synchronized Node checkAndGetCoordinator() {
-        if (coordinator != null && client.isUnavailable(coordinator)) {
-            // 标记 coordinator 未知
+        if (coordinator != null && // coordinator 不为 null
+                client.isUnavailable(coordinator)) { // client 和 coordinator 之间的连接不可用
+            // 标记 coordinator 未知，并返回 null
             markCoordinatorUnknown(true, "coordinator unavailable");
             return null;
         }
@@ -954,6 +1072,7 @@ public abstract class AbstractCoordinator implements Closeable {
     }
 
     protected synchronized void markCoordinatorUnknown(boolean isDisconnected, String cause) {
+        // 如果 coordinator 不为 null
         if (this.coordinator != null) {
             log.info("Group coordinator {} is unavailable or invalid due to cause: {}."
                     + "isDisconnected: {}. Rediscovery will be attempted.", this.coordinator,

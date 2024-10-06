@@ -706,7 +706,8 @@ public class ConsumerNetworkClient implements Closeable {
     public boolean isUnavailable(Node node) {
         lock.lock();
         try {
-            return client.connectionFailed(node) && client.connectionDelay(node, time.milliseconds()) > 0;
+            return client.connectionFailed(node) && // client 和 node 之间的连接失败
+                    client.connectionDelay(node, time.milliseconds()) > 0;
         } finally {
             lock.unlock();
         }

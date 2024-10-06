@@ -24,11 +24,15 @@ import java.util.Optional;
 
 /**
  * Class to extract group rebalance related configs.
+ * <p>
+ *     用于提取 group rebalance 相关配置的类
  */
 public class GroupRebalanceConfig {
 
     public enum ProtocolType {
+        // consumer 用途
         CONSUMER,
+        // kafka connect 用途
         CONNECT;
 
         @Override

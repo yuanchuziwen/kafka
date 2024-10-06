@@ -20,11 +20,12 @@ import org.apache.kafka.clients.GroupRebalanceConfig;
 import org.apache.kafka.common.utils.LogContext;
 import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.common.utils.Timer;
-
 import org.slf4j.Logger;
 
 /**
  * A helper class for managing the heartbeat to the coordinator
+ * <p>
+ *     用于管理与 coordinator 之间的心跳的辅助类
  */
 public final class Heartbeat {
     private final int maxPollIntervalMs;
@@ -35,11 +36,20 @@ public final class Heartbeat {
     private final Timer pollTimer;
     private final Logger log;
 
+    // 上次发送心跳的时间
     private volatile long lastHeartbeatSend = 0L;
+    // 标记是否有已发出但未响应的心跳请求
     private volatile boolean heartbeatInFlight = false;
 
+    /**
+     * 心跳相关配置的构造函数，只由 AbstractCoordinator 调用
+     *
+     * @param config
+     * @param time
+     */
     public Heartbeat(GroupRebalanceConfig config,
                      Time time) {
+        // 如果心跳间隔大于会话超时时间，则抛出异常
         if (config.heartbeatIntervalMs >= config.sessionTimeoutMs)
             throw new IllegalArgumentException("Heartbeat must be set lower than the session timeout");
         this.rebalanceConfig = config;
@@ -68,6 +78,7 @@ public final class Heartbeat {
         return heartbeatInFlight;
     }
 
+    // 发出心跳后，更新 Heartbeat 维护的各项数据；方便下一次的判断
     void sentHeartbeat(long now) {
         lastHeartbeatSend = now;
         heartbeatInFlight = true;
@@ -79,6 +90,7 @@ public final class Heartbeat {
         }
     }
 
+    // 心跳响应失败后回调
     void failHeartbeat() {
         update(time.milliseconds());
         heartbeatInFlight = false;
@@ -87,12 +99,14 @@ public final class Heartbeat {
         log.trace("Heartbeat failed, reset the timer to {}ms remaining", heartbeatTimer.remainingMs());
     }
 
+    // 心跳成功接受到响应后回调
     void receiveHeartbeat() {
         update(time.milliseconds());
         heartbeatInFlight = false;
         sessionTimer.reset(rebalanceConfig.sessionTimeoutMs);
     }
 
+    // 判断是否需要发送心跳
     boolean shouldHeartbeat(long now) {
         update(now);
         return heartbeatTimer.isExpired();

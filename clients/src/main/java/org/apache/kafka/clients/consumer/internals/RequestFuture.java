@@ -145,7 +145,7 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
             // cas 操作，将 INCOMPLETE_SENTINEL 替换为 value
             if (!result.compareAndSet(INCOMPLETE_SENTINEL, value))
                 throw new IllegalStateException("Invalid attempt to complete a request future which is already complete");
-            // 触发成功事件
+            // 触发所有监听当前 future 结果的监听器的成功回调
             fireSuccess();
         } finally {
             completedLatch.countDown();
@@ -226,11 +226,13 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
      * @return The new future
      */
     public <S> RequestFuture<S> compose(final RequestFutureAdapter<T, S> adapter) {
+        // 新增一个 RequestFuture 对象
         final RequestFuture<S> adapted = new RequestFuture<>();
-        // 将入参 adaptor 封装为一个 RequestFutureListener
+        // 将入参 adaptor 封装为一个 RequestFutureListener，它会被添加到当前这个对象 this 中；然后返回上面那个新的 RequestFuture 对象
         addListener(new RequestFutureListener<T>() {
             @Override
             public void onSuccess(T value) {
+                // 一般实现会将 T value 转为 S value
                 adapter.onSuccess(value, adapted);
             }
 
