@@ -669,6 +669,8 @@ public class SubscriptionState {
                 assignedState(tp).updatePositionLeaderNoValidation(leaderAndEpoch);
                 return false;
             }
+
+            // 否则，如果 leader 不存在
         } else {
             return assignedState(tp).maybeValidatePosition(leaderAndEpoch);
         }
@@ -679,9 +681,10 @@ public class SubscriptionState {
      * 尝试使用从 OffsetForLeaderEpoch 请求返回的 end offset 完成验证。
      * <p>
      * 该方法会检查给定的 TopicPartition 是否处于等待验证状态，并根据返回的 epochEndOffset 进行相应处理。
-     * 如果分区不再等待验证，或者当前的 FetchPosition 与请求时的 FetchPosition 不匹配，则跳过验证。
-     * 如果 epochEndOffset 的 endOffset 或 leaderEpoch 未定义，并且存在默认的 offset 重置策略，则重置偏移量。
-     * 如果 epochEndOffset 的 endOffset 小于当前偏移量，并且存在默认的 offset 重置策略，则将偏移量重置为第一个已知的偏移量。
+     * <p>
+     * - 如果分区不再等待验证，或者当前的 FetchPosition 与请求时的 FetchPosition 不匹配，则跳过验证。
+     * - 如果 epochEndOffset 的 endOffset 或 leaderEpoch 未定义，并且存在默认的 offset 重置策略，则重置偏移量。
+     * - 如果 epochEndOffset 的 endOffset 小于当前偏移量，并且存在默认的 offset 重置策略，则将偏移量重置为第一个已知的偏移量。
      * 否则，完成验证。
      *
      * @param tp 需要验证的 TopicPartition
@@ -777,7 +780,7 @@ public class SubscriptionState {
     }
 
     /**
-     * 获取给定分区的 lag。
+     * 获取给定分区的剩余未消费的消息的数量。
      *
      * @param tp 需要获取 lag 的 TopicPartition
      * @param isolationLevel 隔离级别
@@ -798,39 +801,69 @@ public class SubscriptionState {
         }
     }
 
+    /**
+     * 获取给定分区的结束偏移量。
+     *
+     * @param tp             需要获取结束偏移量的 TopicPartition
+     * @param isolationLevel 隔离级别
+     * @return 给定分区的结束偏移量
+     */
     public synchronized Long partitionEndOffset(TopicPartition tp, IsolationLevel isolationLevel) {
+        // 由 KafkaConsumer 调用
+        // 获取分区的状态
         TopicPartitionState topicPartitionState = assignedState(tp);
+        // 如果隔离级别为 READ_COMMITTED，返回 lastStableOffset
         if (isolationLevel == IsolationLevel.READ_COMMITTED) {
             return topicPartitionState.lastStableOffset;
+
+            // 如果隔离级别为 READ_UNCOMMITTED，返回 highWatermark
         } else {
             return topicPartitionState.highWatermark;
         }
     }
 
     public synchronized void requestPartitionEndOffset(TopicPartition tp) {
+        // 由 KafkaConsumer 调用
         TopicPartitionState topicPartitionState = assignedState(tp);
+        // 设置这个分区状态的 endOffsetRequested 值为 true
         topicPartitionState.requestEndOffset();
     }
 
     public synchronized boolean partitionEndOffsetRequested(TopicPartition tp) {
+        // 判断给定分区的 endOffsetRequested 是否为 true
+        // 由 KafkaConsumer 调用
         TopicPartitionState topicPartitionState = assignedState(tp);
         return topicPartitionState.endOffsetRequested();
     }
 
+    /**
+     * 获取给定分区的 leader 偏移量。
+     *
+     * @param tp 需要获取 leader 偏移量的 TopicPartition
+     * @return 给定分区的 leader 偏移量
+     */
     synchronized Long partitionLead(TopicPartition tp) {
+        // 获取分区的状态
         TopicPartitionState topicPartitionState = assignedState(tp);
+        // 如果 logStartOffset 为空，返回 null，否则返回 position 与 logStartOffset 的差值
         return topicPartitionState.logStartOffset == null ? null : topicPartitionState.position.offset - topicPartitionState.logStartOffset;
     }
 
     synchronized void updateHighWatermark(TopicPartition tp, long highWatermark) {
+        // 更新分区的 highWatermark
+        // 由 Fetcher 调用
         assignedState(tp).highWatermark(highWatermark);
     }
 
     synchronized void updateLogStartOffset(TopicPartition tp, long logStartOffset) {
+        // 更新分区的 logStartOffset
+        // 由 Fetcher 调用
         assignedState(tp).logStartOffset(logStartOffset);
     }
 
     synchronized void updateLastStableOffset(TopicPartition tp, long lastStableOffset) {
+        // 更新分区的 lastStableOffset
+        // 由 Fetcher 调用
         assignedState(tp).lastStableOffset(lastStableOffset);
     }
 
@@ -838,7 +871,7 @@ public class SubscriptionState {
      * Set the preferred read replica with a lease timeout. After this time, the replica will no longer be valid and
      * {@link #preferredReadReplica(TopicPartition, long)} will return an empty result.
      * <p>
-     * 设置首选读副本并设置租约超时。在超时后，副本将不再有效，
+     * 为某个分区的 preferred read replica 设置一个租约超时时间。超时后，副本将不再有效，
      * {@link #preferredReadReplica(TopicPartition, long)} 将返回一个空结果。
      *
      * @param tp The topic partition
@@ -846,6 +879,8 @@ public class SubscriptionState {
      * @param timeMs The time at which this preferred replica is no longer valid
      */
     public synchronized void updatePreferredReadReplica(TopicPartition tp, int preferredReadReplicaId, LongSupplier timeMs) {
+        // 由 fetcher 调用，根据 fetcher 拉取的结果来更新 preferredReadReplica（能体现 server 的负载情况）
+        // 看下面的 preferredReadReplica 的调用场景，好像这个 preferredReadReplicaId 其实是一个 nodeId？
         assignedState(tp).updatePreferredReadReplica(preferredReadReplicaId, timeMs);
     }
 
@@ -863,6 +898,7 @@ public class SubscriptionState {
         if (topicPartitionState == null) {
             return Optional.empty();
         } else {
+            // 根据 timeMs 判断 preferred Read Replica 是否过期，如果过期则返回空结果
             return topicPartitionState.preferredReadReplica(timeMs);
         }
     }
@@ -923,7 +959,14 @@ public class SubscriptionState {
         requestOffsetReset(partition, defaultResetStrategy);
     }
 
+    /**
+     * 设置给定分区的下一个允许重试的时间。
+     *
+     * @param partitions           需要设置下一个允许重试时间的 TopicPartition 集合
+     * @param nextAllowResetTimeMs 下一个允许重试的时间
+     */
     synchronized void setNextAllowedRetry(Set<TopicPartition> partitions, long nextAllowResetTimeMs) {
+        // 由 Fetcher 调用
         for (TopicPartition partition : partitions) {
             assignedState(partition).setNextAllowedRetry(nextAllowResetTimeMs);
         }
@@ -934,6 +977,7 @@ public class SubscriptionState {
     }
 
     public synchronized boolean isOffsetResetNeeded(TopicPartition partition) {
+        // 这个方法目前没有用，只在单测的地方使用，以及 MockConsumer
         return assignedState(partition).awaitingReset();
     }
 
@@ -954,6 +998,8 @@ public class SubscriptionState {
     }
 
     public synchronized Set<TopicPartition> initializingPartitions() {
+        // 获取所有处于 INITIALIZING 状态的分区
+        // 这个方法由 consumerCoordinator 调用
         return collectPartitions(state -> state.fetchState.equals(FetchStates.INITIALIZING));
     }
 
@@ -970,11 +1016,14 @@ public class SubscriptionState {
 
     public synchronized void resetInitializingPositions() {
         final Set<TopicPartition> partitionsWithNoOffsets = new HashSet<>();
+        // 遍历每一个分区
         assignment.forEach((tp, partitionState) -> {
+            // 如果分区的状态为 INITIALIZING，则根据默认的重置策略进行重置
             if (partitionState.fetchState.equals(FetchStates.INITIALIZING)) {
                 if (defaultResetStrategy == OffsetResetStrategy.NONE)
                     partitionsWithNoOffsets.add(tp);
                 else
+                    // 否则更新分区的状态为 AWAIT_RESET
                     requestOffsetReset(tp);
             }
         });
@@ -984,37 +1033,59 @@ public class SubscriptionState {
     }
 
     public synchronized Set<TopicPartition> partitionsNeedingReset(long nowMs) {
+        // 获取所有需要重置的分区
+        // 由 Fetcher 调用
         return collectPartitions(state -> state.awaitingReset() && !state.awaitingRetryBackoff(nowMs));
     }
 
     public synchronized Set<TopicPartition> partitionsNeedingValidation(long nowMs) {
+        // 获取所有需要验证的分区
+        // 由 Fetcher 调用
         return collectPartitions(state -> state.awaitingValidation() && !state.awaitingRetryBackoff(nowMs));
     }
 
+    /**
+     * 判断当前 consumer 是否被分配了入参指定的分区
+     * @param tp
+     * @return
+     */
     public synchronized boolean isAssigned(TopicPartition tp) {
         return assignment.contains(tp);
     }
 
+    /**
+     * 判断当前 consumer 是否被分配了入参指定的分区，并且该分区是否处于暂停状态
+     * @param tp
+     * @return
+     */
     public synchronized boolean isPaused(TopicPartition tp) {
         TopicPartitionState assignedOrNull = assignedStateOrNull(tp);
         return assignedOrNull != null && assignedOrNull.isPaused();
     }
 
+    /**
+     * 判断当前 consumer 是否被分配了入参指定的分区，并且该分区是否可以拉取消息
+     * @param tp
+     * @return
+     */
     synchronized boolean isFetchable(TopicPartition tp) {
         TopicPartitionState assignedOrNull = assignedStateOrNull(tp);
         return assignedOrNull != null && assignedOrNull.isFetchable();
     }
 
     public synchronized boolean hasValidPosition(TopicPartition tp) {
+        // 这个其实就是校验 tp 对应的 TopicPartitionState 的 FetchState 是否为 FETCHING
         TopicPartitionState assignedOrNull = assignedStateOrNull(tp);
         return assignedOrNull != null && assignedOrNull.hasValidPosition();
     }
 
     public synchronized void pause(TopicPartition tp) {
+        // 暂停分区的消费，由 KafkaConsumer 调用
         assignedState(tp).pause();
     }
 
     public synchronized void resume(TopicPartition tp) {
+        // 恢复分区的消费，由 KafkaConsumer 调用
         assignedState(tp).resume();
     }
 
@@ -1022,6 +1093,7 @@ public class SubscriptionState {
         for (TopicPartition partition : partitions) {
             // by the time the request failed, the assignment may no longer
             // contain this partition any more, in which case we would just ignore.
+            // 当请求失败时，分配可能不再包含这个分区，此时我们只需忽略
             final TopicPartitionState state = assignedStateOrNull(partition);
             if (state != null)
                 state.requestFailed(nextRetryTimeMs);
@@ -1029,31 +1101,47 @@ public class SubscriptionState {
     }
 
     synchronized void movePartitionToEnd(TopicPartition tp) {
+        // 将指定的 tp 移动到 assignment 的末尾
+        // 由 fetcher 调用
         assignment.moveToEnd(tp);
     }
 
     public synchronized ConsumerRebalanceListener rebalanceListener() {
+        // 获取 rebalanceListener，由 ConsumerCoordinator 调用
         return rebalanceListener;
     }
 
+    // 代表了一个分区的分配状态、消费状态等信息
     private static class TopicPartitionState {
 
+        // 当前分区的拉取状态
         private FetchState fetchState;
-        private FetchPosition position; // last consumed position
+        // 最后消费的位置
+        private FetchPosition position;
 
-        private Long highWatermark; // the high watermark from last fetch
-        private Long logStartOffset; // the log start offset
+        // 上次拉取 metadate 后得知的高水位（最后一条消息的偏移量）
+        private Long highWatermark;
+        // 日志起始偏移量
+        private Long logStartOffset;
+        // 最后稳定的偏移量（事务相关）
         private Long lastStableOffset;
-        private boolean paused;  // whether this partition has been paused by the user
-        private OffsetResetStrategy resetStrategy;  // the strategy to use if the offset needs resetting
+        // 该分区是否被用户暂停
+        private boolean paused;
+        // 如果需要重置偏移量，使用的策略
+        private OffsetResetStrategy resetStrategy;
+        // 下次重试的时间戳
         private Long nextRetryTimeMs;
+        // 首选的读取副本
         private Integer preferredReadReplica;
+        // 首选读取副本的过期时间戳
         private Long preferredReadReplicaExpireTimeMs;
+        // 是否请求了结束偏移量
         private boolean endOffsetRequested;
         
         TopicPartitionState() {
             this.paused = false;
             this.endOffsetRequested = false;
+            // 新建的 TopicPartitionState 的 fetchState 为 INITIALIZING
             this.fetchState = FetchStates.INITIALIZING;
             this.position = null;
             this.highWatermark = null;
@@ -1072,13 +1160,18 @@ public class SubscriptionState {
             endOffsetRequested = true;
         }
 
+        // 状态转换
         private void transitionState(FetchState newState, Runnable runIfTransitioned) {
+            // 尝试转换状态
             FetchState nextState = this.fetchState.transitionTo(newState);
+            // 如果状态转换成功，则执行入参的 Runnable
             if (nextState.equals(newState)) {
                 this.fetchState = nextState;
                 runIfTransitioned.run();
+                // 如果当前的 position 为 null，并且新的状态需要 position，则抛出异常
                 if (this.position == null && nextState.requiresPosition()) {
                     throw new IllegalStateException("Transitioned subscription state to " + nextState + ", but position is null");
+                    // 否则，如果新的状态不需要 position，则将 position 设置为 null（进而触发 reset）
                 } else if (!nextState.requiresPosition()) {
                     this.position = null;
                 }
@@ -1122,19 +1215,26 @@ public class SubscriptionState {
         /**
          * Check if the position exists and needs to be validated. If so, enter the AWAIT_VALIDATION state. This method
          * also will update the position with the current leader and epoch.
+         * <p>
+         *     检查位置是否存在并需要验证。
+         *     如果是这样，则进入 AWAIT_VALIDATION 状态。
+         *     此方法还将使用当前的 leader 和 epoch 更新位置。
          *
          * @param currentLeaderAndEpoch leader and epoch to compare the offset with
          * @return true if the position is now awaiting validation
          */
         private boolean maybeValidatePosition(Metadata.LeaderAndEpoch currentLeaderAndEpoch) {
+            // 如果当前的 fetchState 为 AWAIT_RESET，则返回 false
             if (this.fetchState.equals(FetchStates.AWAIT_RESET)) {
                 return false;
             }
 
+            // 如果入参给的 leader 为空，则返回 false
             if (!currentLeaderAndEpoch.leader.isPresent()) {
                 return false;
             }
 
+            // 如果此时 position 为空，并且 leader 发生了变更，则基于入参的 metadata 信息初始化一个 fetchPosition，并进行验证
             if (position != null && !position.currentLeader.equals(currentLeaderAndEpoch)) {
                 FetchPosition newPosition = new FetchPosition(position.offset, position.offsetEpoch, currentLeaderAndEpoch);
                 validatePosition(newPosition);
@@ -1274,8 +1374,13 @@ public class SubscriptionState {
     /**
      * The fetch state of a partition. This class is used to determine valid state transitions and expose the some of
      * the behavior of the current fetch state. Actual state variables are stored in the {@link TopicPartitionState}.
+     * <p>
+     *     分区的拉取状态。
+     *     此类用于明确规定有效的状态转换并对外公开暴露当前拉取状态的一些行为。
+     *     实际状态变量存储在 {@link TopicPartitionState} 中。
      */
     interface FetchState {
+        // 尝试将当前状态转换为新的状态，否则仍然保持当前状态
         default FetchState transitionTo(FetchState newState) {
             if (validTransitions().contains(newState)) {
                 return newState;
@@ -1286,16 +1391,22 @@ public class SubscriptionState {
 
         /**
          * Return the valid states which this state can transition to
+         * <p>
+         *     返回此状态可以转换到的有效状态
          */
         Collection<FetchState> validTransitions();
 
         /**
          * Test if this state requires a position to be set
+         * <p>
+         *     测试此状态是否需要设置位置
          */
         boolean requiresPosition();
 
         /**
          * Test if this state is considered to have a valid position which can be used for fetching
+         * <p>
+         *     测试此状态是否被认为具有有效的位置，可以用于拉取
          */
         boolean hasValidPosition();
     }
@@ -1305,6 +1416,8 @@ public class SubscriptionState {
      * {@link FetchState#validTransitions}.
      */
     enum FetchStates implements FetchState {
+        // 初始状态
+        // 一般当分区刚分配给消费者时，会处于该状态；
         INITIALIZING() {
             @Override
             public Collection<FetchState> validTransitions() {
@@ -1322,6 +1435,7 @@ public class SubscriptionState {
             }
         },
 
+        // 拉取中状态
         FETCHING() {
             @Override
             public Collection<FetchState> validTransitions() {
@@ -1335,10 +1449,13 @@ public class SubscriptionState {
 
             @Override
             public boolean hasValidPosition() {
+                // 只有 fetching 状态才会返回 true，其他状态都会返回 false
+                // 即认为如果 partition 处于 fetching 状态，那么它对应的 state 中记录的 position 肯定是正确的
                 return true;
             }
         },
 
+        // 等待重置状态
         AWAIT_RESET() {
             @Override
             public Collection<FetchState> validTransitions() {
@@ -1356,6 +1473,7 @@ public class SubscriptionState {
             }
         },
 
+        // 等待验证状态
         AWAIT_VALIDATION() {
             @Override
             public Collection<FetchState> validTransitions() {
@@ -1364,6 +1482,7 @@ public class SubscriptionState {
 
             @Override
             public boolean requiresPosition() {
+                // 验证需要 position
                 return true;
             }
 
@@ -1376,9 +1495,14 @@ public class SubscriptionState {
 
     /**
      * Represents the position of a partition subscription.
+     * <p>
+     *     表示分区订阅的位置。
      *
      * This includes the offset and epoch from the last record in
      * the batch from a FetchResponse. It also includes the leader epoch at the time the batch was consumed.
+     * <p>
+     *     这包括来自 FetchResponse 的批次中最后一条记录的偏移量和 epoch。
+     *     它还包括在消费批次时的 leader epoch。
      */
     public static class FetchPosition {
         public final long offset;
