@@ -223,18 +223,36 @@ public interface ConsumerPartitionAssignor {
      * {@link ConsumerPartitionAssignor#supportedProtocols()}, and it is their responsibility to respect the rules
      * of those protocols in their {@link ConsumerPartitionAssignor#assign(Cluster, GroupSubscription)} implementations.
      * Failures to follow the rules of the supported protocols would lead to runtime error or undefined behavior.
+     * <p>
+     * rebalance protocol 定义了 partition assignment 和 revocation 的语义。
+     * 目的是建立一组一致的规则，所有消费者在 group 中遵循，以便转移 partition 的所有权。
+     * {@link ConsumerPartitionAssignor} 实现者可以通过 {@link ConsumerPartitionAssignor#supportedProtocols()} 声明支持一个或多个 rebalance protocol，
+     * 并负责在其实现的 {@link ConsumerPartitionAssignor#assign(Cluster, GroupSubscription)} 中遵循这些协议的规则。
+     * 未能遵循协议的规则将导致运行时错误或未定义的行为。
+     * </p>
      *
      * The {@link RebalanceProtocol#EAGER} rebalance protocol requires a consumer to always revoke all its owned
      * partitions before participating in a rebalance event. It therefore allows a complete reshuffling of the assignment.
+     * <p>
+     * {@link RebalanceProtocol#EAGER} rebalance protocol 需要一个 consumer 在参与 rebalance 事件之前，总是撤销所有它拥有的 partition。
+     * 因此，允许完全重新分配。
+     * </p>
      *
      * {@link RebalanceProtocol#COOPERATIVE} rebalance protocol allows a consumer to retain its currently owned
      * partitions before participating in a rebalance event. The assignor should not reassign any owned partitions
      * immediately, but instead may indicate consumers the need for partition revocation so that the revoked
      * partitions can be reassigned to other consumers in the next rebalance event. This is designed for sticky assignment
      * logic which attempts to minimize partition reassignment with cooperative adjustments.
+     * <p>
+     * {@link RebalanceProtocol#COOPERATIVE} rebalance protocol 允许 consumer 在参与 rebalance 事件之前，保留其当前拥有的 partition。
+     * 因此，assignor 不应该立即重新分配任何已拥有的 partition，而是可以指示 consumer 需要 partition revocation，
+     * 以便在下一个 rebalance 事件中将已撤销的 partition 重新分配给其他 consumer。
+     * 这是为了实现最小化 partition 重新分配的 sticky assignment 逻辑，通过协作调整来实现。
+     * </p>
      */
     enum RebalanceProtocol {
-        EAGER((byte) 0), COOPERATIVE((byte) 1);
+        EAGER((byte) 0),
+        COOPERATIVE((byte) 1);
 
         private final byte id;
 

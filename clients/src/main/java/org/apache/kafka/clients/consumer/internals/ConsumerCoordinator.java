@@ -36,11 +36,11 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.FencedInstanceIdException;
 import org.apache.kafka.common.errors.GroupAuthorizationException;
 import org.apache.kafka.common.errors.InterruptException;
-import org.apache.kafka.common.errors.UnstableOffsetCommitException;
 import org.apache.kafka.common.errors.RebalanceInProgressException;
 import org.apache.kafka.common.errors.RetriableException;
 import org.apache.kafka.common.errors.TimeoutException;
 import org.apache.kafka.common.errors.TopicAuthorizationException;
+import org.apache.kafka.common.errors.UnstableOffsetCommitException;
 import org.apache.kafka.common.errors.WakeupException;
 import org.apache.kafka.common.message.JoinGroupRequestData;
 import org.apache.kafka.common.message.JoinGroupResponseData;
@@ -261,10 +261,12 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     }
 
     private void maybeUpdateJoinedSubscription(Set<TopicPartition> assignedPartitions) {
+        // 如果使用了 PATTERN 方式的订阅
         if (subscriptions.hasPatternSubscription()) {
             // Check if the assignment contains some topics that were not in the original
             // subscription, if yes we will obey what leader has decided and add these topics
             // into the subscriptions as long as they still match the subscribed pattern
+            // 检查分配是否包含一些原始订阅中没有的主题，如果是，我们将遵循 leader 的决定，并将这些主题添加到订阅中，只要它们仍然匹配订阅的模式
 
             Set<String> addedTopics = new HashSet<>();
             // this is a copy because its handed to listener below
@@ -279,6 +281,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 newSubscription.addAll(addedTopics);
                 newJoinedSubscription.addAll(addedTopics);
 
+                // 更新订阅 topic 的集合
                 if (this.subscriptions.subscribeFromPattern(newSubscription))
                     metadata.requestUpdateForNewTopics();
                 this.joinedSubscription = newJoinedSubscription;
@@ -320,9 +323,11 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     private Exception invokePartitionsRevoked(final Set<TopicPartition> revokedPartitions) {
         log.info("Revoke previously assigned partitions {}", Utils.join(revokedPartitions, ", "));
 
+        // 通过 subscriptionStates 获取到 ConsumerRebalanceListener
         ConsumerRebalanceListener listener = subscriptions.rebalanceListener();
         try {
             final long startMs = time.milliseconds();
+            // 触发 ConsumerRebalanceListener 的 onPartitionsRevoked 方法
             listener.onPartitionsRevoked(revokedPartitions);
             sensors.revokeCallbackSensor.record(time.milliseconds() - startMs);
         } catch (WakeupException | InterruptException e) {
@@ -339,9 +344,11 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     private Exception invokePartitionsLost(final Set<TopicPartition> lostPartitions) {
         log.info("Lost previously assigned partitions {}", Utils.join(lostPartitions, ", "));
 
+        // 通过 subscriptionStates 获取到 ConsumerRebalanceListener
         ConsumerRebalanceListener listener = subscriptions.rebalanceListener();
         try {
             final long startMs = time.milliseconds();
+            // 触发 ConsumerRebalanceListener 的 onPartitionsLost 方法
             listener.onPartitionsLost(lostPartitions);
             sensors.loseCallbackSensor.record(time.milliseconds() - startMs);
         } catch (WakeupException | InterruptException e) {
@@ -363,16 +370,20 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         log.debug("Executing onJoinComplete with generation {} and memberId {}", generation, memberId);
 
         // Only the leader is responsible for monitoring for metadata changes (i.e. partition changes)
+        // 只有 leader 负责监视元数据更改（即分区更改）
         if (!isLeader)
             assignmentSnapshot = null;
 
+        // 再次获取 assignor
         ConsumerPartitionAssignor assignor = lookupAssignor(assignmentStrategy);
         if (assignor == null)
             throw new IllegalStateException("Coordinator selected invalid assignment protocol: " + assignmentStrategy);
 
         // Give the assignor a chance to update internal state based on the received assignment
+        // 让 assignor 有机会根据接收到的分配更新内部状态
         groupMetadata = new ConsumerGroupMetadata(rebalanceConfig.groupId, generation, memberId, rebalanceConfig.groupInstanceId);
 
+        // 获取当前被分配的（上一次被分配的）partition
         Set<TopicPartition> ownedPartitions = new HashSet<>(subscriptions.assignedPartitions());
 
         // should at least encode the short version
@@ -382,24 +393,30 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 "it is possible that the leader's assign function is buggy and did not return any assignment for this member, " +
                 "or because static member is configured and the protocol is buggy hence did not get the assignment for this member");
 
+        // 从 byteBuffer 解析分配得到的 partition
         Assignment assignment = ConsumerProtocol.deserializeAssignment(assignmentBuffer);
 
         Set<TopicPartition> assignedPartitions = new HashSet<>(assignment.partitions());
 
+        // 检查分配是否满足订阅
         if (!subscriptions.checkAssignmentMatchedSubscription(assignedPartitions)) {
             final String reason = String.format("received assignment %s does not match the current subscription %s; " +
                     "it is likely that the subscription has changed since we joined the group, will re-join with current subscription",
                     assignment.partitions(), subscriptions.prettyString());
+            // 触发重新加入 consumerGroup
             requestRejoin(reason);
 
             return;
         }
 
         final AtomicReference<Exception> firstException = new AtomicReference<>(null);
+        // 集合计算，得到新增的 partition
         Set<TopicPartition> addedPartitions = new HashSet<>(assignedPartitions);
         addedPartitions.removeAll(ownedPartitions);
 
+        // 如果 protocol 是 COOPERATIVE 的
         if (protocol == RebalanceProtocol.COOPERATIVE) {
+            // 计算需要撤销的 partition
             Set<TopicPartition> revokedPartitions = new HashSet<>(ownedPartitions);
             revokedPartitions.removeAll(assignedPartitions);
 
@@ -414,30 +431,38 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 revokedPartitions
             );
 
+            // 如果存在需要撤销的 partition
             if (!revokedPartitions.isEmpty()) {
                 // Revoke partitions that were previously owned but no longer assigned;
                 // note that we should only change the assignment (or update the assignor's state)
                 // AFTER we've triggered  the revoke callback
+                // 撤销以前拥有但不再分配的 partition；
+                // 注意，我们应该在触发撤销回调之后才更改分配（或更新分配器的状态）
                 firstException.compareAndSet(null, invokePartitionsRevoked(revokedPartitions));
 
                 // If revoked any partitions, need to re-join the group afterwards
+                // 如果撤销了任何分区，之后需要重新加入组
                 final String reason = String.format("need to revoke partitions %s as indicated " +
                         "by the current assignment and re-join", revokedPartitions);
+                // 触发重新加入 consumerGroup
                 requestRejoin(reason);
             }
         }
 
         // The leader may have assigned partitions which match our subscription pattern, but which
         // were not explicitly requested, so we update the joined subscription here.
+        // leader 可能已经分配了与我们的订阅模式匹配的 partition，但这些 partition 并没有被显式请求，所以我们在这里更新了加入的订阅
         maybeUpdateJoinedSubscription(assignedPartitions);
 
         // Catch any exception here to make sure we could complete the user callback.
+        // 触发 assignor 的 onAssignment 方法，并且捕获异常
         firstException.compareAndSet(null, invokeOnAssignment(assignor, assignment));
 
         // Reschedule the auto commit starting from now
         if (autoCommitEnabled)
             this.nextAutoCommitTimer.updateAndReset(autoCommitIntervalMs);
 
+        // 更新 subscriptionStates 中维护的分配的 partition 集合
         subscriptions.assignFromSubscribed(assignedPartitions);
 
         // Add partitions that were not previously owned but are now assigned
@@ -589,11 +614,13 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     private void updateGroupSubscription(Set<String> topics) {
         // the leader will begin watching for changes to any of the topics the group is interested in,
         // which ensures that all metadata changes will eventually be seen
+        // leader 将开始监视组感兴趣的任何主题的更改，这确保所有元数据更改最终都会被看到
         if (this.subscriptions.groupSubscribe(topics))
             metadata.requestUpdateForNewTopics();
 
         // update metadata (if needed) and keep track of the metadata used for assignment so that
         // we can check after rebalance completion whether anything has changed
+        // 更新元数据（如果需要）并跟踪用于分配的元数据，以便在重新平衡完成后检查是否有任何更改
         if (!client.ensureFreshMetadata(time.timer(Long.MAX_VALUE)))
             throw new TimeoutException();
 
@@ -622,6 +649,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     private void maybeUpdateGroupSubscription(String assignorName,
                                               Map<String, Assignment> assignments,
                                               Set<String> allSubscribedTopics) {
+        // 如果不是通过官方提供的 assignor 分配的
         if (!isAssignFromSubscribedTopicsAssignor(assignorName)) {
             Set<String> assignedTopics = new HashSet<>();
             for (Assignment assigned : assignments.values()) {
@@ -651,6 +679,9 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     protected Map<String, ByteBuffer> performAssignment(String leaderId,
                                                         String assignmentStrategy,
                                                         List<JoinGroupResponseData.JoinGroupResponseMember> allSubscriptions) {
+        // 只在 prepare_join_group 后，response 告知当前 client 它是 leader 后调用
+
+        // 根据 response 给的 protocolName 找到对应的 ConsumerPartitionAssignor
         ConsumerPartitionAssignor assignor = lookupAssignor(assignmentStrategy);
         if (assignor == null)
             throw new IllegalStateException("Coordinator selected invalid assignment protocol: " + assignmentStrategy);
@@ -660,8 +691,10 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         Map<String, Subscription> subscriptions = new HashMap<>();
 
         // collect all the owned partitions
+        // 收集所有拥有的分区
         Map<String, List<TopicPartition>> ownedPartitions = new HashMap<>();
 
+        // 遍历所有订阅，反序列化并收集订阅信息
         for (JoinGroupResponseData.JoinGroupResponseMember memberSubscription : allSubscriptions) {
             Subscription subscription = ConsumerProtocol.deserializeSubscription(ByteBuffer.wrap(memberSubscription.metadata()));
             subscription.setGroupInstanceId(Optional.ofNullable(memberSubscription.groupInstanceId()));
@@ -672,26 +705,33 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
         // the leader will begin watching for changes to any of the topics the group is interested in,
         // which ensures that all metadata changes will eventually be seen
+        // leader 将开始监视组感兴趣的任何主题的更改，这确保所有元数据更改最终都会被看到
+        // 更新当前 consumer 的 subscriptionStates 中的 groupSubscribe 集合
         updateGroupSubscription(allSubscribedTopics);
 
         isLeader = true;
 
         log.debug("Performing assignment using strategy {} with subscriptions {}", assignorName, subscriptions);
 
+        // 执行分区分配
         Map<String, Assignment> assignments = assignor.assign(metadata.fetch(), new GroupSubscription(subscriptions)).groupAssignment();
 
         // skip the validation for built-in cooperative sticky assignor since we've considered
         // the "generation" of ownedPartition inside the assignor
-        if (protocol == RebalanceProtocol.COOPERATIVE && !assignorName.equals(COOPERATIVE_STICKY_ASSIGNOR_NAME)) {
+        // 跳过内置 cooperative sticky assignor 的验证，因为我们已经在 assignor 内部考虑了 ownedPartition 的 "generation"
+        if (protocol == RebalanceProtocol.COOPERATIVE &&
+                !assignorName.equals(COOPERATIVE_STICKY_ASSIGNOR_NAME)) {
             validateCooperativeAssignment(ownedPartitions, assignments);
         }
 
+        // 可能更新组订阅
         maybeUpdateGroupSubscription(assignorName, assignments, allSubscribedTopics);
 
         assignmentSnapshot = metadataSnapshot;
 
         log.info("Finished assignment for group at generation {}: {}", generation().generationId, assignments);
 
+        // 序列化分配结果
         Map<String, ByteBuffer> groupAssignment = new HashMap<>();
         for (Map.Entry<String, Assignment> assignmentEntry : assignments.entrySet()) {
             ByteBuffer buffer = ConsumerProtocol.serializeAssignment(assignmentEntry.getValue());
@@ -740,6 +780,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     protected void onJoinPrepare(int generation, String memberId) {
         log.debug("Executing onJoinPrepare with generation {} and memberId {}", generation, memberId);
         // commit offsets prior to rebalance if auto-commit enabled
+        // 如果启用了自动提交，则在重新平衡之前提交偏移量
         maybeAutoCommitOffsetsSync(time.timer(rebalanceConfig.rebalanceTimeoutMs));
 
         // the generation / member-id can possibly be reset by the heartbeat thread
@@ -748,40 +789,57 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         // otherwise we can proceed normally and revoke the partitions depending on the protocol,
         // and in that case we should only change the assignment AFTER the revoke callback is triggered
         // so that users can still access the previously owned partitions to commit offsets etc.
+        // generation / member-id 可能由心跳线程在收到错误或心跳超时后重置；
+        // 在这种情况下，之前拥有的 partition 将丢失，我们应该触发 callback 回调并清理 assignment；
+        // 否则我们可以正常进行，并根据 protocol 撤销 partition，在这种情况下，我们只能在撤销回调触发后更改 assignment
+        // 这样用户仍然可以访问之前拥有的分区来提交偏移量等。
         Exception exception = null;
         final Set<TopicPartition> revokedPartitions;
+        // 如果 generation 为 NO_GENERATION 并且 memberId 为 Generation.NO_MEMBER_ID，则触发 partitionsLost 回调
         if (generation == Generation.NO_GENERATION.generationId &&
             memberId.equals(Generation.NO_GENERATION.memberId)) {
+            // 取到所有之前分配的分区
             revokedPartitions = new HashSet<>(subscriptions.assignedPartitions());
 
             if (!revokedPartitions.isEmpty()) {
                 log.info("Giving away all assigned partitions as lost since generation has been reset," +
                     "indicating that consumer is no longer part of the group");
+                // 触发 ConsumerRebalanceListener 的 onPartitionsLost 回调
                 exception = invokePartitionsLost(revokedPartitions);
-
+                // 清空已分配的所有分区，注意是清空 partition 而不是清空 topic；因此不会 reset SubscriptionType
                 subscriptions.assignFromSubscribed(Collections.emptySet());
             }
+
+            // 否则，说明 generation 不为 NO_GENERATION 或者 memberId 不为 Generation.NO_MEMBER_ID
         } else {
             switch (protocol) {
+                // 如果 protocol 是 EAGER，则撤销所有分区
                 case EAGER:
                     // revoke all partitions
                     revokedPartitions = new HashSet<>(subscriptions.assignedPartitions());
+                    // 触发所有已分配分区的 onPartitionsRevoked 回调
                     exception = invokePartitionsRevoked(revokedPartitions);
 
+                    // 清空已分配的所有分区，注意是清空 partition 而不是清空 topic；因此不会 reset SubscriptionType
                     subscriptions.assignFromSubscribed(Collections.emptySet());
 
                     break;
 
+                // 如果 protocol 是 COOPERATIVE，则只撤销那些不再订阅的分区
                 case COOPERATIVE:
                     // only revoke those partitions that are not in the subscription any more.
+                    // 获取当前被分配d分区
                     Set<TopicPartition> ownedPartitions = new HashSet<>(subscriptions.assignedPartitions());
+                    // 过滤得到不再订阅的分区
                     revokedPartitions = ownedPartitions.stream()
                         .filter(tp -> !subscriptions.subscription().contains(tp.topic()))
                         .collect(Collectors.toSet());
 
                     if (!revokedPartitions.isEmpty()) {
+                        // 针对这些不再订阅的分区，触发 onPartitionsRevoked 回调
                         exception = invokePartitionsRevoked(revokedPartitions);
 
+                        // 更新 ownedPartitions，移除那些不再订阅的分区
                         ownedPartitions.removeAll(revokedPartitions);
                         subscriptions.assignFromSubscribed(ownedPartitions);
                     }
@@ -790,6 +848,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             }
         }
 
+        // 重置 leader 信息，重置 groupSubscription
         isLeader = false;
         subscriptions.resetGroupSubscription();
 
@@ -1127,7 +1186,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
             // 发送偏移量提交请求
             RequestFuture<Void> future = sendOffsetCommitRequest(offsets);
-            // 轮询请求
+            // 触发 io
             client.poll(future, timer);
 
             // We may have had in-flight offset commits when the synchronous commit began. If so, ensure that
@@ -1192,10 +1251,13 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     }
 
     private void maybeAutoCommitOffsetsSync(Timer timer) {
+        // 如果开起来 autoCommit
         if (autoCommitEnabled) {
+            // 通过 subscriptionState 取到所有已消费的偏移量
             Map<TopicPartition, OffsetAndMetadata> allConsumedOffsets = subscriptions.allConsumed();
             try {
                 log.debug("Sending synchronous auto-commit of offsets {}", allConsumedOffsets);
+                // 触发一次同步提交
                 if (!commitOffsetsSync(allConsumedOffsets, timer))
                     log.debug("Auto-commit of offsets {} timed out before completion", allConsumedOffsets);
             } catch (WakeupException | InterruptException e) {

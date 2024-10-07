@@ -143,7 +143,7 @@ public class WorkerCoordinator extends AbstractCoordinator implements Closeable 
             }
 
             if (rejoinNeededOrPending()) {
-                ensureActiveGroup();
+                super.ensureActiveGroup();
                 now = time.milliseconds();
             }
 
