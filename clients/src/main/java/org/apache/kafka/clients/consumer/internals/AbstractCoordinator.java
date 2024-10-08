@@ -1235,6 +1235,8 @@ public abstract class AbstractCoordinator implements Closeable {
 
     /**
      * Close the coordinator, waiting if needed to send LeaveGroup.
+     * <p>
+     *     关闭 coordinator，并等待发送 LeaveGroup 请求。
      */
     @Override
     public final void close() {
@@ -1246,12 +1248,16 @@ public abstract class AbstractCoordinator implements Closeable {
      */
     protected void close(Timer timer) {
         try {
+            // 关闭心跳线程
             closeHeartbeatThread();
         } finally {
             // Synchronize after closing the heartbeat thread since heartbeat thread
             // needs this lock to complete and terminate after close flag is set.
+            // 在关闭心跳线程之后同步，因为心跳线程需要此锁来在设置 close 标志后完成并终止。
             synchronized (this) {
+                // 如果开启了 close 后自动离开 group
                 if (rebalanceConfig.leaveGroupOnClose) {
+                    // 做一些清理和回调工作
                     onLeavePrepare();
                     maybeLeaveGroup("the consumer is being closed");
                 }
@@ -1260,8 +1266,13 @@ public abstract class AbstractCoordinator implements Closeable {
                 // interrupted using wakeup) and the leave group request which have been queued, but not
                 // yet sent to the broker. Wait up to close timeout for these pending requests to be processed.
                 // If coordinator is not known, requests are aborted.
+
+                // 此时，可能有挂起的提交（异步提交或使用 wakeup 中断的同步提交）和已排队但尚未发送到 broker 的 leave group 请求。
+                // 等待关闭超时时间，以便处理这些挂起的请求。如果 coordinator 未知，则请求将被中止。
                 Node coordinator = checkAndGetCoordinator();
-                if (coordinator != null && !client.awaitPendingRequests(coordinator, timer))
+                // 如果 coordinator 存在，则阻塞直到超时或者 pending 请求处理完毕
+                if (coordinator != null &&
+                        !client.awaitPendingRequests(coordinator, timer))
                     log.warn("Close timed out with {} pending requests to coordinator, terminating client connections",
                             client.pendingRequestCount(coordinator));
             }

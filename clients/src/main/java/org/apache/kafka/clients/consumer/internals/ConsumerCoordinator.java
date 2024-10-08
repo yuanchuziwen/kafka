@@ -649,13 +649,18 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
     /**
      * Return the time to the next needed invocation of {@link ConsumerNetworkClient#poll(Timer)}.
+     * <p>
+     *     返回下一次需要调用 {@link ConsumerNetworkClient#poll(Timer)} 的时间。
+     *
      * @param now current time in milliseconds
      * @return the maximum time in milliseconds the caller should wait before the next invocation of poll()
      */
     public long timeToNextPoll(long now) {
+        // 如果没有开启 autoCommit，则返回 timeToNextHeartbeat
         if (!autoCommitEnabled)
             return timeToNextHeartbeat(now);
 
+        // 否则，返回 nextAutoCommitTimer 的剩余时间和 timeToNextHeartbeat 的最小值
         return Math.min(nextAutoCommitTimer.remainingMs(), timeToNextHeartbeat(now));
     }
 
@@ -675,6 +680,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         maybeUpdateSubscriptionMetadata();
     }
 
+    // 判断是否是通过官方提供的 assignor 分配的
     private boolean isAssignFromSubscribedTopicsAssignor(String name) {
         return ASSIGN_FROM_SUBSCRIBED_ASSIGNORS.contains(name);
     }
@@ -684,8 +690,13 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
      * and assign their partitions to the members; in this case we would like to update the leader's
      * own metadata with the newly added topics so that it will not trigger a subsequent rebalance
      * when these topics gets updated from metadata refresh.
+     * <p>
+     *     使用自定义的 assignor 可能会创建一些不在订阅列表中的主题，并将它们的分区分配给成员；
+     *     在这种情况下，我们希望更新 leader 自己的元数据，以便在这些主题从元数据刷新中更新时不会触发后续的重新平衡。
      *
      * We skip the check for in-product assignors since this will not happen in in-product assignors.
+     * <p>
+     *     我们跳过了对产品内 assignor 的检查，因为这不会发生在产品内 assignor 中。
      *
      * TODO: this is a hack and not something we want to support long-term unless we push regex into the protocol
      *       we may need to modify the ConsumerPartitionAssignor API to better support this case.
@@ -699,18 +710,21 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                                               Set<String> allSubscribedTopics) {
         // 如果不是通过官方提供的 assignor 分配的
         if (!isAssignFromSubscribedTopicsAssignor(assignorName)) {
+            // 统计所有已分配的 topic
             Set<String> assignedTopics = new HashSet<>();
             for (Assignment assigned : assignments.values()) {
                 for (TopicPartition tp : assigned.partitions())
                     assignedTopics.add(tp.topic());
             }
 
+            // 如果已分配的 topic 不包含所有订阅的 topic，则打印警告
             if (!assignedTopics.containsAll(allSubscribedTopics)) {
                 Set<String> notAssignedTopics = new HashSet<>(allSubscribedTopics);
                 notAssignedTopics.removeAll(assignedTopics);
                 log.warn("The following subscribed topics are not assigned to any members: {} ", notAssignedTopics);
             }
 
+            // 如果已分配的 topic 不包含所有订阅的 topic，则更新 groupSubscription
             if (!allSubscribedTopics.containsAll(assignedTopics)) {
                 Set<String> newlyAddedTopics = new HashSet<>(assignedTopics);
                 newlyAddedTopics.removeAll(allSubscribedTopics);
@@ -742,7 +756,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         // 收集所有拥有的分区
         Map<String, List<TopicPartition>> ownedPartitions = new HashMap<>();
 
-        // 遍历所有订阅，反序列化并收集订阅信息
+        // 遍历来自 response 的所有订阅信息，反序列化并采集信息
         for (JoinGroupResponseData.JoinGroupResponseMember memberSubscription : allSubscriptions) {
             Subscription subscription = ConsumerProtocol.deserializeSubscription(ByteBuffer.wrap(memberSubscription.metadata()));
             subscription.setGroupInstanceId(Optional.ofNullable(memberSubscription.groupInstanceId()));
@@ -761,7 +775,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
         log.debug("Performing assignment using strategy {} with subscriptions {}", assignorName, subscriptions);
 
-        // 执行分区分配
+        // 执行 partition assign 的计算
         Map<String, Assignment> assignments = assignor.assign(metadata.fetch(), new GroupSubscription(subscriptions)).groupAssignment();
 
         // skip the validation for built-in cooperative sticky assignor since we've considered
@@ -775,6 +789,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         // 可能更新组订阅
         maybeUpdateGroupSubscription(assignorName, assignments, allSubscribedTopics);
 
+        // 更新快照
         assignmentSnapshot = metadataSnapshot;
 
         log.info("Finished assignment for group at generation {}: {}", generation().generationId, assignments);
@@ -791,18 +806,27 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
     /**
      * Used by COOPERATIVE rebalance protocol only.
+     * <p>
+     *     仅由 COOPERATIVE rebalance protocol 使用。
      *
      * Validate the assignments returned by the assignor such that no owned partitions are going to
      * be reassigned to a different consumer directly: if the assignor wants to reassign an owned partition,
      * it must first remove it from the new assignment of the current owner so that it is not assigned to any
      * member, and then in the next rebalance it can finally reassign those partitions not owned by anyone to consumers.
+     * <p>
+     *     验证 assignor 返回的分配，以便不会将拥有的 partition 直接重新分配给不同的 consumer：
+     *     如果 assignor 想要重新分配一个拥有的 partition，它必须首先从当前所有者的新分配中删除它，以便它不分配给任何成员，
+     *     然后在下一次重新平衡中，它最终可以将那些没有任何人拥有的 partition 重新分配给消费者。
      */
     private void validateCooperativeAssignment(final Map<String, List<TopicPartition>> ownedPartitions,
                                                final Map<String, Assignment> assignments) {
+        // 统计需要撤销的 partition 和新增的 partition
         Set<TopicPartition> totalRevokedPartitions = new HashSet<>();
         Set<TopicPartition> totalAddedPartitions = new HashSet<>();
+        // 遍历每个分配结果
         for (final Map.Entry<String, Assignment> entry : assignments.entrySet()) {
             final Assignment assignment = entry.getValue();
+            // 计算对于该 member 来说，新增的 partition 和撤销的 partition
             final Set<TopicPartition> addedPartitions = new HashSet<>(assignment.partitions());
             addedPartitions.removeAll(ownedPartitions.get(entry.getKey()));
             final Set<TopicPartition> revokedPartitions = new HashSet<>(ownedPartitions.get(entry.getKey()));
@@ -814,6 +838,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
         // if there are overlap between revoked partitions and added partitions, it means some partitions
         // immediately gets re-assigned to another member while it is still claimed by some member
+        // 如果撤销的 partition 和新增的 partition 有重叠，则意味着一些 partition 立即被重新分配给另一个成员，而它仍然被某些成员声明
         totalAddedPartitions.retainAll(totalRevokedPartitions);
         if (!totalAddedPartitions.isEmpty()) {
             log.error("With the COOPERATIVE protocol, owned partitions cannot be " +
@@ -837,31 +862,32 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         // otherwise we can proceed normally and revoke the partitions depending on the protocol,
         // and in that case we should only change the assignment AFTER the revoke callback is triggered
         // so that users can still access the previously owned partitions to commit offsets etc.
+
         // generation / member-id 可能由心跳线程在收到错误或心跳超时后重置；
         // 在这种情况下，之前拥有的 partition 将丢失，我们应该触发 callback 回调并清理 assignment；
         // 否则我们可以正常进行，并根据 protocol 撤销 partition，在这种情况下，我们只能在撤销回调触发后更改 assignment
         // 这样用户仍然可以访问之前拥有的分区来提交偏移量等。
         Exception exception = null;
         final Set<TopicPartition> revokedPartitions;
-        // 如果 generation 为 NO_GENERATION 并且 memberId 为 Generation.NO_MEMBER_ID，则触发 partitionsLost 回调
+        // 如果 generation 为 NO_GENERATION && memberId 为 Generation.NO_MEMBER_ID，则触发 partitionsLost 回调
         if (generation == Generation.NO_GENERATION.generationId &&
             memberId.equals(Generation.NO_GENERATION.memberId)) {
             // 取到所有之前分配的分区
             revokedPartitions = new HashSet<>(subscriptions.assignedPartitions());
-
+            // 如果存在之前分配的分区，说明肯定不是第一次加入；而是因为 generation 重置导致的
             if (!revokedPartitions.isEmpty()) {
                 log.info("Giving away all assigned partitions as lost since generation has been reset," +
                     "indicating that consumer is no longer part of the group");
                 // 触发 ConsumerRebalanceListener 的 onPartitionsLost 回调
                 exception = invokePartitionsLost(revokedPartitions);
-                // 清空已分配的所有分区，注意是清空 partition 而不是清空 topic；因此不会 reset SubscriptionType
+                // 清空已分配的所有分区，注意是清空 partition 而不是清空 topic（不是 unsubscribe）；因此不会 reset SubscriptionType
                 subscriptions.assignFromSubscribed(Collections.emptySet());
             }
 
             // 否则，说明 generation 不为 NO_GENERATION 或者 memberId 不为 Generation.NO_MEMBER_ID
         } else {
             switch (protocol) {
-                // 如果 protocol 是 EAGER，则撤销所有分区
+                // 如果 protocol 是 EAGER，则撤销当前 consumer 分配得到的所有分区
                 case EAGER:
                     // revoke all partitions
                     revokedPartitions = new HashSet<>(subscriptions.assignedPartitions());
@@ -870,15 +896,15 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
                     // 清空已分配的所有分区，注意是清空 partition 而不是清空 topic；因此不会 reset SubscriptionType
                     subscriptions.assignFromSubscribed(Collections.emptySet());
-
                     break;
 
                 // 如果 protocol 是 COOPERATIVE，则只撤销那些不再订阅的分区
                 case COOPERATIVE:
                     // only revoke those partitions that are not in the subscription any more.
-                    // 获取当前被分配d分区
+                    // 获取当前被分配的所有 partition
                     Set<TopicPartition> ownedPartitions = new HashSet<>(subscriptions.assignedPartitions());
-                    // 过滤得到不再订阅的分区
+                    // 可能由于订阅信息的变更，这里会过滤掉那些不再被订阅的 topic 下的 partition
+                    // 也就是说，这里实际上被 revoked 的 partition 可能非常少，甚至几乎不会 revoked
                     revokedPartitions = ownedPartitions.stream()
                         .filter(tp -> !subscriptions.subscription().contains(tp.topic()))
                         .collect(Collectors.toSet());
@@ -891,7 +917,6 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                         ownedPartitions.removeAll(revokedPartitions);
                         subscriptions.assignFromSubscribed(ownedPartitions);
                     }
-
                     break;
             }
         }
@@ -921,10 +946,13 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         // 在离开 group 之前，我们应该重置 assignment 并触发回调
         Set<TopicPartition> droppedPartitions = new HashSet<>(subscriptions.assignedPartitions());
 
-        // 如果 consumer 有自动分配的分区，并且 droppedPartitions 不为空，则触发回调
-        if (subscriptions.hasAutoAssignedPartitions() && !droppedPartitions.isEmpty()) {
+        // 如果 subscription 是 AUTO_TOPIC 或 AUTO_PATTERN 分配的，并且确实分配了 partition
+        // 则需要执行清理和回调工作
+        if (subscriptions.hasAutoAssignedPartitions() &&
+                !droppedPartitions.isEmpty()) {
             final Exception e;
-            // 如果 generation 为 NO_GENERATION 或者 rebalanceInProgress() 为 true，则触发 partitionsLost 回调
+            // 如果 generation 为 NO_GENERATION 或者处于 rebalance 状态
+            // 则触发 partitionsLost 回调
             if (generation() == Generation.NO_GENERATION || rebalanceInProgress()) {
                 e = invokePartitionsLost(droppedPartitions);
             } else {
@@ -988,7 +1016,9 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
      * @return true iff the operation completed within the timeout
      */
     public boolean refreshCommittedOffsetsIfNeeded(Timer timer) {
-        // 获取正在初始化的分区
+        // 由 KafkaConsumer 调用
+
+        // 获取正在初始化的分区（此时这些分区只是完成了 assign，但是还不知道具体的消费细节信息）
         final Set<TopicPartition> initializingPartitions = subscriptions.initializingPartitions();
         // 获取这些分区的已提交偏移量
         final Map<TopicPartition, OffsetAndMetadata> offsets = fetchCommittedOffsets(initializingPartitions, timer);
@@ -1030,13 +1060,18 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
     /**
      * Fetch the current committed offsets from the coordinator for a set of partitions.
+     * <p>
+     *     从 coordinator 获取一组分区的当前提交偏移量。
      *
      * @param partitions The partitions to fetch offsets for
      * @return A map from partition to the committed offset or null if the operation timed out
      */
     public Map<TopicPartition, OffsetAndMetadata> fetchCommittedOffsets(final Set<TopicPartition> partitions,
                                                                         final Timer timer) {
-        if (partitions.isEmpty()) return Collections.emptyMap();
+        // 如果入参中需要拉取 offset 的分区为空，则直接返回空 map
+        if (partitions.isEmpty()) {
+            return Collections.emptyMap();
+        }
 
         final Generation generationForOffsetRequest = generationIfStable();
         if (pendingCommittedOffsetRequest != null &&
@@ -1309,7 +1344,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     private void maybeAutoCommitOffsetsSync(Timer timer) {
         // 如果开起来 autoCommit
         if (autoCommitEnabled) {
-            // 通过 subscriptionState 取到所有已消费的偏移量
+            // 通过 subscriptionState 取到所有已消费的偏移量（实际上就是上次拉取到的位移信息）
             Map<TopicPartition, OffsetAndMetadata> allConsumedOffsets = subscriptions.allConsumed();
             try {
                 log.debug("Sending synchronous auto-commit of offsets {}", allConsumedOffsets);

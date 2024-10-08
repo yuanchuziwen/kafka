@@ -251,7 +251,17 @@ public interface ConsumerPartitionAssignor {
      * </p>
      */
     enum RebalanceProtocol {
+        /**
+         * Eager rebalance protocol requires a consumer to always revoke all its owned partitions before participating in a rebalance event.
+         * It therefore allows a complete reshuffling of the assignment.
+         */
         EAGER((byte) 0),
+
+        /**
+         * Cooperative rebalance protocol allows a consumer to retain its currently owned partitions before participating in a rebalance event.
+         * The assignor should not reassign any owned partitions immediately, but instead may indicate consumers the need for partition revocation
+         * so that the revoked partitions can be reassigned to other consumers in the next rebalance event.
+         */
         COOPERATIVE((byte) 1);
 
         private final byte id;
