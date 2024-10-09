@@ -36,11 +36,20 @@ import org.apache.kafka.common.utils.Utils;
  * as the group coordinator. The coordinator selects one member to perform the group assignment and
  * propagates the subscriptions of all members to it. Then {@link #assign(Cluster, GroupSubscription)} is called
  * to perform the assignment and the results are forwarded back to each respective members
+ * <p>
+ * 这个接口用于定义 {@link org.apache.kafka.clients.consumer.KafkaConsumer} 的自定义分区分配。
+ * consumer group 中的成员订阅他们感兴趣的 topic，并将他们的订阅转发给充当 group coordinator 的 Kafka broker。
+ * coordinator 选择一个成员执行 group 分配，并将所有成员的订阅传播给它。
+ * 然后调用 {@link #assign(Cluster, GroupSubscription)} 来执行分配，并将结果转发回每个相应的成员。
  *
  * In some cases, it is useful to forward additional metadata to the assignor in order to make
  * assignment decisions. For this, you can override {@link #subscriptionUserData(Set)} and provide custom
  * userData in the returned Subscription. For example, to have a rack-aware assignor, an implementation
  * can use this user data to forward the rackId belonging to each member.
+ * <p>
+ * 在某些情况下，使用额外的元数据来执行分配决策是有用的。
+ * 为此，可以重写 {@link #subscriptionUserData(Set)} 并提供自定义的用户数据。
+ * 例如，要实现一个 rack-aware assignor，可以在此方法中使用用户数据来转发每个成员的 rackId。
  */
 public interface ConsumerPartitionAssignor {
 
@@ -58,6 +67,9 @@ public interface ConsumerPartitionAssignor {
 
     /**
      * Perform the group assignment given the member subscriptions and current cluster metadata.
+     * <p>
+     *     给定成员订阅和当前集群元数据，执行 group 分配。
+     *
      * @param metadata Current topic/broker metadata known by consumer
      * @param groupSubscription Subscriptions from all members including metadata provided through {@link #subscriptionUserData(Set)}
      * @return A map from the members to their respective assignments. This should have one entry
@@ -67,6 +79,9 @@ public interface ConsumerPartitionAssignor {
 
     /**
      * Callback which is invoked when a group member receives its assignment from the leader.
+     * <p>
+     *     当 group 成员从 leader 接收到分配时调用的回调。
+     *
      * @param assignment The local member's assignment as provided by the leader in {@link #assign(Cluster, GroupSubscription)}
      * @param metadata Additional metadata on the consumer (optional)
      */
@@ -75,6 +90,8 @@ public interface ConsumerPartitionAssignor {
 
     /**
      * Indicate which rebalance protocol this assignor works with;
+     * <p>
+     *     指示此 assignor 使用哪种 rebalance protocol；
      * By default it should always work with {@link RebalanceProtocol#EAGER}.
      */
     default List<RebalanceProtocol> supportedProtocols() {
@@ -96,10 +113,17 @@ public interface ConsumerPartitionAssignor {
      */
     String name();
 
+    /**
+     * 封装了 consumer 的订阅信息
+     */
     final class Subscription {
+        // 订阅的 topic 列表
         private final List<String> topics;
+        // 用户数据
         private final ByteBuffer userData;
+        // 上一次分配到的分区
         private final List<TopicPartition> ownedPartitions;
+        // 实例 id
         private Optional<String> groupInstanceId;
 
         public Subscription(List<String> topics, ByteBuffer userData, List<TopicPartition> ownedPartitions) {
@@ -148,6 +172,9 @@ public interface ConsumerPartitionAssignor {
         }
     }
 
+    /**
+     * 封装了分区分配信息
+     */
     final class Assignment {
         private List<TopicPartition> partitions;
         private ByteBuffer userData;
@@ -178,7 +205,11 @@ public interface ConsumerPartitionAssignor {
         }
     }
 
+    /**
+     * 封装了 consumer group 中所有 consumer 的订阅信息
+     */
     final class GroupSubscription {
+        // key=consumer id, value=订阅信息
         private final Map<String, Subscription> subscriptions;
 
         public GroupSubscription(Map<String, Subscription> subscriptions) {
@@ -197,7 +228,11 @@ public interface ConsumerPartitionAssignor {
         }
     }
 
+    /**
+     * 封装了 consumer group 中所有 consumer 的分区分配信息
+     */
     final class GroupAssignment {
+        // key=consumer id, value=分区分配信息
         private final Map<String, Assignment> assignments;
 
         public GroupAssignment(Map<String, Assignment> assignments) {
@@ -289,8 +324,11 @@ public interface ConsumerPartitionAssignor {
     /**
      * Get a list of configured instances of {@link org.apache.kafka.clients.consumer.ConsumerPartitionAssignor}
      * based on the class names/types specified by {@link org.apache.kafka.clients.consumer.ConsumerConfig#PARTITION_ASSIGNMENT_STRATEGY_CONFIG}
+     * <p>
+     *     根据 {@link org.apache.kafka.clients.consumer.ConsumerConfig#PARTITION_ASSIGNMENT_STRATEGY_CONFIG} 指定的类名/类型，
      */
     static List<ConsumerPartitionAssignor> getAssignorInstances(List<String> assignorClasses, Map<String, Object> configs) {
+        // 帮助实例化 assignor 并调用 configure 方法
         List<ConsumerPartitionAssignor> assignors = new ArrayList<>();
 
         if (assignorClasses == null)

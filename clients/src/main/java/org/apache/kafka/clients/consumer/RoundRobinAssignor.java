@@ -33,10 +33,15 @@ import java.util.TreeSet;
  * then proceeds to do a round robin assignment from partition to consumer. If the subscriptions of all consumer
  * instances are identical, then the partitions will be uniformly distributed. (i.e., the partition ownership counts
  * will be within a delta of exactly one across all consumers.)
+ * <p>
+ *     round robin assignor 将所有可用的分区和所有可用的消费者排列在一起。然后，它从分区到消费者进行轮询分配。
+ *     如果所有消费者实例的订阅是相同的，那么分区将被均匀分布。 (即，分区所有权计数在所有消费者之间的差值将恰好为一个)
  *
  * <p>For example, suppose there are two consumers <code>C0</code> and <code>C1</code>, two topics <code>t0</code> and <code>t1</code>,
  * and each topic has 3 partitions, resulting in partitions <code>t0p0</code>, <code>t0p1</code>, <code>t0p2</code>,
  * <code>t1p0</code>, <code>t1p1</code>, and <code>t1p2</code>.
+ * <p>
+ *     例如，假设有两个消费者 C0 和 C1，两个主题 t0 和 t1，每个主题有 3 个分区，导致分区 t0p0，t0p1，t0p2，t1p0，t1p1 和 t1p2。
  *
  * <p>The assignment will be:
  * <ul>

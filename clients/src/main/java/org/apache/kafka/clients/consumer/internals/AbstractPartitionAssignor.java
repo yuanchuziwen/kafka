@@ -33,6 +33,8 @@ import java.util.Set;
 /**
  * Abstract assignor implementation which does some common grunt work (in particular collecting
  * partition counts which are always needed in assignors).
+ * <p>
+ *     抽象的分配器实现，执行一些常见的 grunt work（特别是收集总是需要的 partition counts）。
  */
 public abstract class AbstractPartitionAssignor implements ConsumerPartitionAssignor {
     private static final Logger log = LoggerFactory.getLogger(AbstractPartitionAssignor.class);
@@ -49,6 +51,10 @@ public abstract class AbstractPartitionAssignor implements ConsumerPartitionAssi
 
     @Override
     public GroupAssignment assign(Cluster metadata, GroupSubscription groupSubscription) {
+        // 这个 assign 方法是忽略 userData 的
+        // 如果开发人员在兹定于 assignor 的时候需要使用 userData 控制分区分配结果，就不能继承当前类
+
+        // 获取 consumer group 内所有成员的订阅情况
         Map<String, Subscription> subscriptions = groupSubscription.groupSubscription();
         // 确定有哪些 topic 需要分配
         Set<String> allSubscribedTopics = new HashSet<>();
@@ -65,7 +71,8 @@ public abstract class AbstractPartitionAssignor implements ConsumerPartitionAssi
                 log.debug("Skipping assignment for topic {} since no metadata is available", topic);
         }
 
-        // 模板方法，执行分配
+        // 执行分配
+        // 模板方法，交给子类实现
         Map<String, List<TopicPartition>> rawAssignments = assign(partitionsPerTopic, subscriptions);
 
         // this class maintains no user data, so just wrap the results
@@ -88,6 +95,7 @@ public abstract class AbstractPartitionAssignor implements ConsumerPartitionAssi
         return partitions;
     }
 
+    // 封装 group 内的成员信息
     public static class MemberInfo implements Comparable<MemberInfo> {
         public final String memberId;
         public final Optional<String> groupInstanceId;
