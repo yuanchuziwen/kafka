@@ -41,20 +41,30 @@ import static org.apache.kafka.common.requests.FetchMetadata.INVALID_SESSION_ID;
 
 /**
  * FetchSessionHandler maintains the fetch session state for connecting to a broker.
+ * <p>
+ *     FetchSessionHandler 维护了与 broker 连接的 fetch 会话状态。
  *
  * Using the protocol outlined by KIP-227, clients can create incremental fetch sessions.
  * These sessions allow the client to fetch information about a set of partition over
  * and over, without explicitly enumerating all the partitions in the request and the
  * response.
+ * <p>
+ *     使用 KIP-227 中概述的协议，客户端可以创建增量 fetch 会话。
+ *     这些会话允许客户端重复获取有关一组分区的信息，而无需在请求和响应中显式枚举所有分区。
  *
  * FetchSessionHandler tracks the partitions which are in the session.  It also
  * determines which partitions need to be included in each fetch request, and what
  * the attached fetch session metadata should be for each request.  The corresponding
  * class on the receiving broker side is FetchManager.
+ * <p>
+ *     FetchSessionHandler 跟踪会话中的分区。
+ *     它还确定每个 fetch 请求中需要包含哪些分区，以及每个请求的附加 fetch 会话元数据应该是什么。
+ *     接收 broker 端的相应类是 FetchManager。
  */
 public class FetchSessionHandler {
     private final Logger log;
 
+    // 维护着当前 FetchSessionHandler 对应的 broker 的 node id
     private final int node;
 
     /**
@@ -69,6 +79,8 @@ public class FetchSessionHandler {
 
     /**
      * All of the partitions which exist in the fetch request session.
+     * <p>
+     *     存在于 fetch 请求会话中的所有分区。
      */
     private LinkedHashMap<TopicPartition, PartitionData> sessionPartitions =
         new LinkedHashMap<>(0);
@@ -76,16 +88,22 @@ public class FetchSessionHandler {
     public static class FetchRequestData {
         /**
          * The partitions to send in the fetch request.
+         * <p>
+         *     要在 fetch 请求中发送的分区。
          */
         private final Map<TopicPartition, PartitionData> toSend;
 
         /**
          * The partitions to send in the request's "forget" list.
+         * <p>
+         *     要在请求的“forget”列表中发送的分区。
          */
         private final List<TopicPartition> toForget;
 
         /**
          * All of the partitions which exist in the fetch request session.
+         * <p>
+         *     存在于 fetch 请求会话中的所有分区。
          */
         private final Map<TopicPartition, PartitionData> sessionPartitions;
 
@@ -174,16 +192,24 @@ public class FetchSessionHandler {
     public class Builder {
         /**
          * The next partitions which we want to fetch.
+         * <p>
+         *     我们想要获取的下一个分区。
          *
          * It is important to maintain the insertion order of this list by using a LinkedHashMap rather
          * than a regular Map.
+         * <p>
+         *     通过使用 LinkedHashMap 而不是常规 Map 来维护此列表的插入顺序是很重要的。
          *
          * One reason is that when dealing with FULL fetch requests, if there is not enough response
          * space to return data from all partitions, the server will only return data from partitions
          * early in this list.
+         * <p>
+         *     一个原因是，在处理 FULL fetch 请求时，如果没有足够的响应空间来返回所有分区的数据，
          *
          * Another reason is because we make use of the list ordering to optimize the preparation of
          * incremental fetch requests (see below).
+         * <p>
+         *     服务器将只返回此列表中较早的分区的数据。
          */
         private LinkedHashMap<TopicPartition, PartitionData> next;
         private final boolean copySessionPartitions;
@@ -339,6 +365,8 @@ public class FetchSessionHandler {
 
     /**
      * Verify that the partitions in an incremental fetch response are contained in the session.
+     * <p>
+     *     验证增量 fetch 响应中的分区是否包含在会话中。
      *
      * @param response  The response.
      * @return          True if the incremental fetch response partitions are valid.
@@ -393,12 +421,15 @@ public class FetchSessionHandler {
 
     /**
      * Handle the fetch response.
+     * <p>
+     *     处理 fetch 响应。
      *
      * @param response  The response.
      * @return          True if the response is well-formed; false if it can't be processed
      *                  because of missing or unexpected partitions.
      */
     public boolean handleResponse(FetchResponse response) {
+        // 如果存在异常
         if (response.error() != Errors.NONE) {
             log.info("Node {} was unable to process the fetch request with {}: {}.",
                 node, nextMetadata, response.error());
@@ -417,6 +448,11 @@ public class FetchSessionHandler {
                 // value set.  We don't want to log this with a warning, since it's not an error.
                 // However, the empty full fetch response can't be processed, so it's still appropriate
                 // to return false here.
+
+                // 一般来说，空的 full fetch 响应是无效的。但是，KIP-219 指定，如果 broker 想要限制客户端，
+                // 它将对 full fetch 请求做出空响应，并设置 throttleTimeMs 值。
+                // 我们不希望用警告记录这一点，因为这不是错误。
+                // 但是，空的 full fetch 响应无法处理，因此在这里返回 false 是合适的。
                 if (log.isDebugEnabled()) {
                     log.debug("Node {} sent a empty full fetch response to indicate that this " +
                         "client should be throttled for {} ms.", node, response.throttleTimeMs());
@@ -443,11 +479,15 @@ public class FetchSessionHandler {
                 return true;
             }
         } else {
+            // 验证增量 fetch 响应中的分区是否包含在会话中
             String problem = verifyIncrementalFetchResponsePartitions(response);
+            // 如果存在缺失的分区，则认为是发生了异常
             if (problem != null) {
                 log.info("Node {} sent an invalid incremental fetch response with {}", node, problem);
                 nextMetadata = nextMetadata.nextCloseExisting();
                 return false;
+
+                // session 被关闭
             } else if (response.sessionId() == INVALID_SESSION_ID) {
                 // The incremental fetch session was closed by the server.
                 if (log.isDebugEnabled())
@@ -455,6 +495,7 @@ public class FetchSessionHandler {
                             node, nextMetadata.sessionId(), responseDataToLogString(response));
                 nextMetadata = FetchMetadata.INITIAL;
                 return true;
+
             } else {
                 // The incremental fetch session was continued by the server.
                 // We don't have to do anything special here to support KIP-219, since an empty incremental

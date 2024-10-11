@@ -707,7 +707,7 @@ public class ConsumerNetworkClient implements Closeable {
         lock.lock();
         try {
             return client.connectionFailed(node) && // client 和 node 之间的连接失败
-                    client.connectionDelay(node, time.milliseconds()) > 0;
+                    client.connectionDelay(node, time.milliseconds()) > 0; // 重连延迟大于 0
         } finally {
             lock.unlock();
         }
