@@ -476,6 +476,7 @@ public abstract class AbstractCoordinator implements Closeable {
     boolean ensureActiveGroup(final Timer timer) {
         // always ensure that the coordinator is ready because we may have been disconnected
         // when sending heartbeats and does not necessarily require us to rejoin the group.
+
         // 总是确保协调器已准备好，因为在发送心跳时可能已断开连接，不一定需要我们重新加入组。
         if (!ensureCoordinatorReady(timer)) {
             return false;
@@ -550,12 +551,14 @@ public abstract class AbstractCoordinator implements Closeable {
             // on each iteration of the loop because an event requiring a rebalance (such as a metadata
             // refresh which changes the matched subscription set) can occur while another rebalance is
             // still in progress.
+
             // 如果需要调用 onJoinPrepare，则调用。
             // 我们设置一个标志，以确保在 pending rebalance 结束之前不会重复调用它。
             // onJoinPrepare 必须在每次循环中调用，因为可能在 rebalance 期间，再次产生需要重新平衡的事件（例如，改变匹配的订阅集的元数据刷新）
             if (needsJoinPrepare) {
                 // need to set the flag before calling onJoinPrepare since the user callback may throw
                 // exception, in which case upon retry we should not retry onJoinPrepare either.
+
                 // 在调用 onJoinPrepare 之前需要设置标志，因为用户回调可能会抛出异常，
                 // 在重试时，我们也不应该重试 onJoinPrepare。
                 needsJoinPrepare = false;
@@ -583,7 +586,8 @@ public abstract class AbstractCoordinator implements Closeable {
                 // and shouldn't block heartbeat thread.
                 // See {@link PlaintextConsumerTest#testMaxPollIntervalMsDelayInAssignment}
                 // generation 信息可能会被心跳线程并发清除。
-                // 不能使用 synchronized 来执行 {@code onJoinComplete}，因为它可能足够长，不应该阻塞心跳线程。
+
+                // 不能使用 synchronized 来执行 {@code onJoinComplete}，因为它可能很长，不应该阻塞心跳线程。
                 // 参见 {@link PlaintextConsumerTest#testMaxPollIntervalMsDelayInAssignment}
                 synchronized (AbstractCoordinator.this) {
                     generationSnapshot = this.generation;
@@ -605,6 +609,7 @@ public abstract class AbstractCoordinator implements Closeable {
                     // we can only reset the join group future after the completion callback returns. This ensures
                     // that if the callback is woken up, we will retry it on the next joinGroupIfNeeded.
                     // And because of that we should explicitly trigger resetJoinGroupFuture in other conditions below.
+
                     // 通常情况下，一旦 future 完成，我们应该重置 joinGroupFuture，但是这里只能在完成回调返回后重置 join group future。
                     // 这确保了如果回调被唤醒，我们将在下一个 joinGroupIfNeeded 上重试它。
                     resetJoinGroupFuture();
@@ -650,6 +655,7 @@ public abstract class AbstractCoordinator implements Closeable {
         // we store the join future in case we are woken up by the user after beginning the
         // rebalance in the call to poll below. This ensures that we do not mistakenly attempt
         // to rejoin before the pending rebalance has completed.
+
         // 我们存储 join future，以防在调用 poll 时，用户在开始 rebalance 后被唤醒。
         // 这确保了我们不会在 pending rebalance 完成之前错误地尝试重新加入。
         if (joinFuture == null) {
@@ -657,6 +663,7 @@ public abstract class AbstractCoordinator implements Closeable {
             state = MemberState.PREPARING_REBALANCE;
             // a rebalance can be triggered consecutively if the previous one failed,
             // in this case we would not update the start time.
+
             // 如果之前的 rebalance 失败，可以连续触发 rebalance，此时我们不会更新开始时间。
             if (lastRebalanceStartMs == -1L)
                 lastRebalanceStartMs = time.milliseconds();
@@ -666,6 +673,7 @@ public abstract class AbstractCoordinator implements Closeable {
                 @Override
                 public void onSuccess(ByteBuffer value) {
                     // do nothing since all the handler logic are in SyncGroupResponseHandler already
+                    // 因为核心逻辑都在 SyncGroupResponseHandler 中，所以这里什么都不做
                 }
 
                 @Override
@@ -715,6 +723,9 @@ public abstract class AbstractCoordinator implements Closeable {
 
         // Note that we override the request timeout using the rebalance timeout since that is the
         // maximum time that it may block on the coordinator. We add an extra 5 seconds for small delays.
+
+        // 注意：我们使用 rebalance timeout 覆盖请求超时，因为这是它可能在 coordinator 上阻塞的最长时间。
+        // 我们额外增加 5 秒以处理小的延迟。
         int joinGroupTimeoutMs = Math.max(client.defaultRequestTimeoutMs(),
             rebalanceConfig.rebalanceTimeoutMs + JOIN_GROUP_TIMEOUT_LAPSE);
         return client.send(coordinator, requestBuilder, joinGroupTimeoutMs)
@@ -729,6 +740,7 @@ public abstract class AbstractCoordinator implements Closeable {
         @Override
         public void handle(JoinGroupResponse joinResponse, RequestFuture<ByteBuffer> future) {
             Errors error = joinResponse.error();
+
             // 如果 joinResponse 成功
             if (error == Errors.NONE) {
                 // 检查 protocolType 是否一致（consumer、connect）
@@ -773,6 +785,8 @@ public abstract class AbstractCoordinator implements Closeable {
                         }
                     }
                 }
+
+                // 处理各种异常
             } else if (error == Errors.COORDINATOR_LOAD_IN_PROGRESS) {
                 log.info("JoinGroup failed: Coordinator {} is loading the group.", coordinator());
                 // backoff and retry
@@ -844,6 +858,7 @@ public abstract class AbstractCoordinator implements Closeable {
 
     private RequestFuture<ByteBuffer> onJoinFollower() {
         // send follower's sync group with an empty assignment
+
         // 发送 follower 的 sync group 请求，分配结果为空
         SyncGroupRequest.Builder requestBuilder =
                 new SyncGroupRequest.Builder(
@@ -863,6 +878,7 @@ public abstract class AbstractCoordinator implements Closeable {
     private RequestFuture<ByteBuffer> onJoinLeader(JoinGroupResponse joinResponse) {
         try {
             // perform the leader synchronization and send back the assignment for the group
+
             // 执行 leader 同步并发送各个分区消费的分配结果
             // 下面是一个模板方法
             Map<String, ByteBuffer> groupAssignment = performAssignment(joinResponse.data().leader(), joinResponse.data().protocolName(),
@@ -889,6 +905,7 @@ public abstract class AbstractCoordinator implements Closeable {
                                     .setAssignments(groupAssignmentList)
                     );
             log.debug("Sending leader SyncGroup to coordinator {} at generation {}: {}", this.coordinator, this.generation, requestBuilder);
+            // 将消息放到缓冲区
             return sendSyncGroupRequest(requestBuilder);
         } catch (RuntimeException e) {
             return RequestFuture.failure(e);
@@ -911,6 +928,7 @@ public abstract class AbstractCoordinator implements Closeable {
         public void handle(SyncGroupResponse syncResponse,
                            RequestFuture<ByteBuffer> future) {
             Errors error = syncResponse.error();
+            // 如果没有异常
             if (error == Errors.NONE) {
                 if (isProtocolTypeInconsistent(syncResponse.data().protocolType())) {
                     log.error("SyncGroup failed due to inconsistent Protocol Type, received {} but expected {}",
@@ -944,6 +962,7 @@ public abstract class AbstractCoordinator implements Closeable {
                                 sensors.successfulRebalanceSensor.record(lastRebalanceEndMs - lastRebalanceStartMs);
                                 lastRebalanceStartMs = -1L;
 
+                                // 触发回调
                                 future.complete(ByteBuffer.wrap(syncResponse.data().assignment()));
                             }
                         } else {

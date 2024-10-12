@@ -297,11 +297,13 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
     private void maybeUpdateJoinedSubscription(Set<TopicPartition> assignedPartitions) {
         // 在 onJoinComplete 方法中调用，会更新 joinedSubscription
+
         // 如果使用了 PATTERN 方式的订阅
         if (subscriptions.hasPatternSubscription()) {
             // Check if the assignment contains some topics that were not in the original
             // subscription, if yes we will obey what leader has decided and add these topics
             // into the subscriptions as long as they still match the subscribed pattern
+
             // 检查分配是否包含一些原始订阅中没有的主题，如果是，我们将遵循 leader 的决定，并将这些主题添加到订阅中，只要它们仍然匹配订阅的模式
 
             Set<String> addedTopics = new HashSet<>();
@@ -413,6 +415,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         log.debug("Executing onJoinComplete with generation {} and memberId {}", generation, memberId);
 
         // Only the leader is responsible for monitoring for metadata changes (i.e. partition changes)
+
         // 只有 leader 负责监视元数据更改（即分区更改）
         if (!isLeader)
             assignmentSnapshot = null;
@@ -423,6 +426,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             throw new IllegalStateException("Coordinator selected invalid assignment protocol: " + assignmentStrategy);
 
         // Give the assignor a chance to update internal state based on the received assignment
+
         // 让 assignor 有机会根据接收到的分配更新内部状态
         groupMetadata = new ConsumerGroupMetadata(rebalanceConfig.groupId, generation, memberId, rebalanceConfig.groupInstanceId);
 
@@ -438,7 +442,6 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
         // 从 byteBuffer 解析分配得到的 partition
         Assignment assignment = ConsumerProtocol.deserializeAssignment(assignmentBuffer);
-
         Set<TopicPartition> assignedPartitions = new HashSet<>(assignment.partitions());
 
         // 检查分配是否满足订阅
@@ -459,7 +462,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
         // 如果 protocol 是 COOPERATIVE 的
         if (protocol == RebalanceProtocol.COOPERATIVE) {
-            // 计算需要撤销的 partition
+            // 计算需要触发 revoked 的 partition
             Set<TopicPartition> revokedPartitions = new HashSet<>(ownedPartitions);
             revokedPartitions.removeAll(assignedPartitions);
 
@@ -479,6 +482,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 // Revoke partitions that were previously owned but no longer assigned;
                 // note that we should only change the assignment (or update the assignor's state)
                 // AFTER we've triggered  the revoke callback
+
                 // 撤销以前拥有但不再分配的 partition；
                 // 注意，我们应该在触发撤销回调之后才更改分配（或更新分配器的状态）
                 firstException.compareAndSet(null, invokePartitionsRevoked(revokedPartitions));
@@ -494,10 +498,12 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
         // The leader may have assigned partitions which match our subscription pattern, but which
         // were not explicitly requested, so we update the joined subscription here.
+
         // leader 可能已经分配了与我们的订阅模式匹配的 partition，但这些 partition 并没有被显式请求，所以我们在这里更新了加入的订阅
         maybeUpdateJoinedSubscription(assignedPartitions);
 
         // Catch any exception here to make sure we could complete the user callback.
+
         // 触发 assignor 的 onAssignment 方法，并且捕获异常
         firstException.compareAndSet(null, invokeOnAssignment(assignor, assignment));
 
@@ -573,7 +579,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             // group proactively due to application inactivity even if (say) the coordinator cannot be found.
             // 始终更新心跳的最后轮询时间，以便即使（例如）找不到协调器，心跳线程也不会由于应用程序不活动而主动离开组。
             pollHeartbeat(timer.currentTimeMs());
-            // 如果 coordinator 未知，并且无法获取到 coordinator，则返回 false
+            // 如果 coordinator node 未知，并且通过尝试仍然无法获取到 coordinator node，则返回 false
             if (coordinatorUnknown() && !ensureCoordinatorReady(timer)) {
                 return false;
             }
@@ -583,6 +589,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 // due to a race condition between the initial metadata fetch and the initial rebalance,
                 // we need to ensure that the metadata is fresh before joining initially. This ensures
                 // that we have matched the pattern against the cluster's topics at least once before joining.
+
                 // 由于「第一次 fetch metadata」和「第一次 rebalance」之间存在竞争，我们需要确保在 join group 前，metadata 是最新的。
                 // 这确保我们在加入之前至少一次将模式与集群的主题匹配。
                 if (subscriptions.hasPatternSubscription()) {
@@ -593,6 +600,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                     // reduce the number of rebalances caused by single topic creation by asking consumer to
                     // refresh metadata before re-joining the group as long as the refresh backoff time has
                     // passed.
+
                     // 对于使用基于模式订阅的消费者组，在创建主题后，
                     // 任何在元数据刷新后发现该主题的消费者都可以触发整个消费者组的重新平衡。
                     // 如果消费者在非常不同的时间刷新元数据，则在创建一个主题后可以触发多次重新平衡。
@@ -612,8 +620,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 }
 
                 // if not wait for join group, we would just use a timer of 0
-                // 如果不等待加入组，我们将只使用 0 的计时器
-                // 如果 ensureActiveGroup 失败，则返回 false
+                // 尝试确保 group 信息是最新的，内部会保证 consumer 加入 group 并且完成 rebalance（分配好 partition）
                 if (!ensureActiveGroup(waitForJoinGroup ? timer : time.timer(0L))) {
                     // since we may use a different timer in the callee, we'd still need
                     // to update the original timer's current time after the call
@@ -624,7 +631,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 }
             }
 
-            // 否则，说明不需要 rejoin 或不处于 pending 的状态
+            // 否则，说明是通过 user assign 的方式分配的 partition，那么不需要感知 consumer group
         } else {
             // For manually assigned partitions, if there are no ready nodes, await metadata.
             // If connections to all nodes fail, wakeups triggered while attempting to send fetch
@@ -633,6 +640,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             // awaitMetadataUpdate() initiates new connections with configured backoff and avoids the busy loop.
             // When group management is used, metadata wait is already performed for this scenario as
             // coordinator is unknown, hence this check is not required.
+
             // 对于手动 assign 的 partition，如果没有准备好的 node，则等待元数据。
             // 如果所有 node 的 connection 都失败，在尝试发送 fetch 请求时触发的 wakeup 会导致轮询立即返回，从而导致轮询的紧密循环。
             // 如果没有 wakeup，poll() 在没有 channel 的情况下会阻塞超时，延迟重新连接。
@@ -670,12 +678,14 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     private void updateGroupSubscription(Set<String> topics) {
         // the leader will begin watching for changes to any of the topics the group is interested in,
         // which ensures that all metadata changes will eventually be seen
+
         // leader 将开始监视组感兴趣的任何主题的更改，这确保所有元数据更改最终都会被看到
         if (this.subscriptions.groupSubscribe(topics))
             metadata.requestUpdateForNewTopics();
 
         // update metadata (if needed) and keep track of the metadata used for assignment so that
         // we can check after rebalance completion whether anything has changed
+
         // 更新元数据（如果需要）并跟踪用于分配的元数据，以便在重新平衡完成后检查是否有任何更改
         if (!client.ensureFreshMetadata(time.timer(Long.MAX_VALUE)))
             throw new TimeoutException();
@@ -770,6 +780,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
         // the leader will begin watching for changes to any of the topics the group is interested in,
         // which ensures that all metadata changes will eventually be seen
+
         // leader 将开始监视组感兴趣的任何主题的更改，这确保所有元数据更改最终都会被看到
         // 更新当前 consumer 的 subscriptionStates 中的 groupSubscribe 集合
         updateGroupSubscription(allSubscribedTopics);
@@ -783,6 +794,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
         // skip the validation for built-in cooperative sticky assignor since we've considered
         // the "generation" of ownedPartition inside the assignor
+
         // 跳过内置 cooperative sticky assignor 的验证，因为我们已经在 assignor 内部考虑了 ownedPartition 的 "generation"
         if (protocol == RebalanceProtocol.COOPERATIVE &&
                 !assignorName.equals(COOPERATIVE_STICKY_ASSIGNOR_NAME)) {
@@ -856,7 +868,10 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     protected void onJoinPrepare(int generation, String memberId) {
         log.debug("Executing onJoinPrepare with generation {} and memberId {}", generation, memberId);
         // commit offsets prior to rebalance if auto-commit enabled
+
         // 如果启用了自动提交，则在重新平衡之前提交偏移量
+        // 可以理解为这部分的提交会在 AUTO 订阅方式的 consumer 加入到 group 之前完成
+        // 如果是 user assign 方式指派的 partition，那么就需要在 consumer.assign 方法那里主动调用
         maybeAutoCommitOffsetsSync(time.timer(rebalanceConfig.rebalanceTimeoutMs));
 
         // the generation / member-id can possibly be reset by the heartbeat thread
@@ -872,7 +887,9 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         // 这样用户仍然可以访问之前拥有的分区来提交偏移量等。
         Exception exception = null;
         final Set<TopicPartition> revokedPartitions;
-        // 如果 generation 为 NO_GENERATION && memberId 为 Generation.NO_MEMBER_ID，则触发 partitionsLost 回调
+
+        // 如果 generation 为 NO_GENERATION && memberId 为 Generation.NO_MEMBER_ID，
+        // 则触发 partitionsLost 回调
         if (generation == Generation.NO_GENERATION.generationId &&
             memberId.equals(Generation.NO_GENERATION.memberId)) {
             // 取到所有之前分配的分区
@@ -978,12 +995,13 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
      */
     @Override
     public boolean rejoinNeededOrPending() {
-        // 如果没有使用自动分配的分区，则不需要重新加入
+        // 如果没有使用自动分配的分区，则不需要重新加入；也就是说，只有 AUTO_TOPIC 或 AUTO_PATTERN 才需要重新加入
         if (!subscriptions.hasAutoAssignedPartitions())
             return false;
 
         // we need to rejoin if we performed the assignment and metadata has changed;
         // also for those owned-but-no-longer-existed partitions we should drop them as lost
+
         // 如果我们执行了 assignment 行为，或者 metadata 发生了变化，则需要重新加入 consumer group
         // 同时，对于那些不再存在的分区，我们应该将它们丢弃
         if (assignmentSnapshot != null &&
@@ -1095,6 +1113,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             }
 
             // contact coordinator to fetch committed offsets
+
             // 发送一个 offsetFetchRequest 请求
             final RequestFuture<Map<TopicPartition, OffsetAndMetadata>> future;
             if (pendingCommittedOffsetRequest != null) {
@@ -1169,6 +1188,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
      * 这个方法会在 coordinator.poll、commitOffsetsAsync、commitOffsetsSync、close 方法中调用
      */
     void invokeCompletedOffsetCommitCallbacks() {
+        // 它会在每次 commitOffset 的时候以及 coordinator.poll 的时候被调用
         // 如果已经获取到 fencing 异常，则抛出 FencedInstanceIdException 异常
         if (asyncCommitFenced.get()) {
             throw new FencedInstanceIdException("Get fenced exception for group.instance.id "
@@ -1263,6 +1283,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 }
                 completedOffsetCommits.add(new OffsetCommitCompletion(cb, offsets, commitException));
                 // 如果异常是 FencedInstanceIdException，则设置 asyncCommitFenced 为 true，那么在下一次尝试触发回调的时候，会抛出异常
+                // FencedInstanceIdException 主要是在一些事务性的场景下，当 consumer 的 instance.id 被隔离时，会抛出这个异常？
                 if (commitException instanceof FencedInstanceIdException) {
                     asyncCommitFenced.set(true);
                 }
@@ -1460,11 +1481,12 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
         // 获取 generation
         final Generation generation;
-        // 如果订阅了自动分配的分区
+        // 如果订阅了自动分配的分区，则验证是否正常在 group 中
         if (subscriptions.hasAutoAssignedPartitions()) {
             generation = generationIfStable();
             // if the generation is null, we are not part of an active group (and we expect to be).
             // the only thing we can do is fail the commit and let the user rejoin the group in poll().
+
             // 如果 generation 为空，则表示消费者不是活跃组的一部分（并且我们期望它是）。
             // 我们能做的唯一事情是使提交失败，并让用户在 poll() 中重新加入组。 
             if (generation == null) {
