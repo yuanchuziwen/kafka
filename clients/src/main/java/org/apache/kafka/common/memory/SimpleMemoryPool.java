@@ -28,6 +28,10 @@ import org.slf4j.LoggerFactory;
 /**
  * a simple pool implementation. this implementation just provides a limit on the total outstanding memory.
  * any buffer allocated must be release()ed always otherwise memory is not marked as reclaimed (and "leak"s)
+ * <p>
+ *     一个简单的内存池实现。
+ *     这个实现只是提供了对总未完成内存的限制。
+ *     任何分配的缓冲区都必须始终释放，否则内存不会被标记为已回收（并且“泄漏”）。
  */
 public class SimpleMemoryPool implements MemoryPool {
     protected final Logger log = LoggerFactory.getLogger(getClass()); //subclass-friendly

@@ -61,6 +61,11 @@ object EndPoint {
 
 /**
  * Part of the broker definition - matching host/port pair to a protocol
+ * <p>
+ *   broker 的一部分定义 - 匹配 host/port 对到一个协议
+ *   一般的服务器都有多块网卡，可以配置多个 IP、Kafka 可以同时监听多个端口。
+ *   一个 EndPoint 就是一个 host:port 对，对应一个 listenerName 和一个 securityProtocol。
+ *   每个 endpoint 对应一个 acceptor 线程
  */
 case class EndPoint(host: String, port: Int, listenerName: ListenerName, securityProtocol: SecurityProtocol) {
   def connectionString: String = {
