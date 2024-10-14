@@ -340,6 +340,7 @@ class RequestChannel(val queueSize: Int,
                      val metrics: RequestChannel.Metrics) extends KafkaMetricsGroup {
   import RequestChannel._
   private val requestQueue = new ArrayBlockingQueue[BaseRequest](queueSize)
+  // channel 对应的 processor 集合，实际每个 processor 对应一个 selector 线程
   private val processors = new ConcurrentHashMap[Int, Processor]()
   val requestQueueSizeMetricName = metricNamePrefix.concat(RequestQueueSizeMetric)
   val responseQueueSizeMetricName = metricNamePrefix.concat(ResponseQueueSizeMetric)
@@ -352,6 +353,7 @@ class RequestChannel(val queueSize: Int,
     }
   })
 
+  // 添加 processor
   def addProcessor(processor: Processor): Unit = {
     if (processors.putIfAbsent(processor.id, processor) != null)
       warn(s"Unexpected processor with processorId ${processor.id}")
@@ -365,8 +367,13 @@ class RequestChannel(val queueSize: Int,
     removeMetric(responseQueueSizeMetricName, Map(ProcessorMetricTag -> processorId.toString))
   }
 
-  /** Send a request to be handled, potentially blocking until there is room in the queue for the request */
+  /**
+   * Send a request to be handled, potentially blocking until there is room in the queue for the request
+   * <p>
+   *   将请求发送到处理，可能会阻塞，直到队列中有请求的空间
+   */
   def sendRequest(request: RequestChannel.Request): Unit = {
+    // 由 processor 调用，将请求放入队列，后续进行业务操作
     requestQueue.put(request)
   }
 
@@ -406,7 +413,9 @@ class RequestChannel(val queueSize: Int,
     sendResponse(new EndThrottlingResponse(request))
   }
 
-  /** Send a response back to the socket server to be sent over the network */
+  /**
+   * Send a response back to the socket server to be sent over the network
+   */
   private[network] def sendResponse(response: RequestChannel.Response): Unit = {
     if (isTraceEnabled) {
       val requestHeader = response.request.headerForLoggingOrThrottling()
