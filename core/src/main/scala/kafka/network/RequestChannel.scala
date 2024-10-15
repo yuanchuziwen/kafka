@@ -78,6 +78,7 @@ object RequestChannel extends Logging {
     }
   }
 
+  // ---- 定义一些 request ----
   class Request(val processor: Int,
                 val context: RequestContext,
                 val startTimeNanos: Long,
@@ -87,6 +88,8 @@ object RequestChannel extends Logging {
                 val envelope: Option[RequestChannel.Request] = None) extends BaseRequest {
     // These need to be volatile because the readers are in the network thread and the writers are in the request
     // handler threads or the purgatory threads
+
+    // 这些需要是 volatile 的，因为 readers 在网络线程中，writers 在 request handler 线程或 purgatory 线程中
     @volatile var requestDequeueTimeNanos = -1L
     @volatile var apiLocalCompleteTimeNanos = -1L
     @volatile var responseCompleteTimeNanos = -1L
@@ -102,6 +105,8 @@ object RequestChannel extends Logging {
 
     // This is constructed on creation of a Request so that the JSON representation is computed before the request is
     // processed by the api layer. Otherwise, a ProduceRequest can occur without its data (ie. it goes into purgatory).
+
+    // 在创建 Request 时构建，以便在请求被 api 层处理之前计算 JSON 表示。否则，ProduceRequest 可能会在没有数据的情况下发生（即进入 purgatory）。
     val requestLog: Option[JsonNode] =
       if (RequestChannel.isRequestLoggingEnabled) Some(RequestConvertToJson.request(loggableRequest))
       else None
@@ -115,6 +120,10 @@ object RequestChannel extends Logging {
     //most request types are parsed entirely into objects at this point. for those we can release the underlying buffer.
     //some (like produce, or any time the schema contains fields of types BYTES or NULLABLE_BYTES) retain a reference
     //to the buffer. for those requests we cannot release the buffer early, but only when request processing is done.
+
+    // 大多数请求类型在这一点上完全解析为对象。对于这些请求，我们可以释放底层缓冲区。
+    // 一些请求（例如 produce，或者模式包含 BYTES 或 NULLABLE_BYTES 类型字段的任何请求）保留对缓冲区的引用。
+    // 对于这些请求，我们不能提前释放缓冲区，而只能在请求处理完成时才能释放。
     if (!header.apiKey.requiresDelayedAllocation) {
       releaseBuffer()
     }
@@ -122,11 +131,15 @@ object RequestChannel extends Logging {
     def isForwarded: Boolean = envelope.isDefined
 
     def buildResponseSend(abstractResponse: AbstractResponse): Send = {
+      // 将业务处理的 response 封装成 Send 对象
       envelope match {
         case Some(request) =>
           val envelopeResponse = if (abstractResponse.errorCounts().containsKey(Errors.NOT_CONTROLLER)) {
             // Since it's a NOT_CONTROLLER error response, we need to make envelope response with NOT_CONTROLLER error
             // to notify the requester (i.e. BrokerToControllerRequestThread) to update active controller
+
+            // 因为它是一个 NOT_CONTROLLER 错误响应，我们需要使用 NOT_CONTROLLER 错误创建包装响应，
+            // 以通知请求者（即 BrokerToControllerRequestThread）更新 active controller
             new EnvelopeResponse(new EnvelopeResponseData()
               .setErrorCode(Errors.NOT_CONTROLLER.code()))
           } else {
@@ -140,9 +153,10 @@ object RequestChannel extends Logging {
     }
 
     def responseNode(response: AbstractResponse): Option[JsonNode] = {
-      if (RequestChannel.isRequestLoggingEnabled)
+      if (RequestChannel.isRequestLoggingEnabled) {
+        // 将 response 基于 ApiVersion 转换为 JsonNode
         Some(RequestConvertToJson.response(response, context.apiVersion))
-      else
+      } else
         None
     }
 
@@ -291,8 +305,11 @@ object RequestChannel extends Logging {
 
   }
 
+  // ---- 开始定义一些 response ----
+
   sealed abstract class Response(val request: Request) {
 
+    // 每个 response 都有一个 processor，用于将 response 发送给客户端
     def processor: Int = request.processor
 
     def responseLog: Option[JsonNode] = None
@@ -300,7 +317,11 @@ object RequestChannel extends Logging {
     def onComplete: Option[Send => Unit] = None
   }
 
-  /** responseLogValue should only be defined if request logging is enabled */
+  /**
+   * responseLogValue should only be defined if request logging is enabled
+   * <p>
+   *   responseLogValue 只有在启用请求日志记录时才应该定义
+   */
   class SendResponse(request: Request,
                      val responseSend: Send,
                      val responseLogValue: Option[JsonNode],
@@ -334,13 +355,23 @@ object RequestChannel extends Logging {
   }
 }
 
+// ---- 结束定义一些 response ----
+
 class RequestChannel(val queueSize: Int,
                      val metricNamePrefix: String,
                      time: Time,
                      val metrics: RequestChannel.Metrics) extends KafkaMetricsGroup {
   import RequestChannel._
+  // processor 收到请求后，将请求放入 RequestChannel 的 requestQueue 中
   private val requestQueue = new ArrayBlockingQueue[BaseRequest](queueSize)
+  /*
+  processor 线程将读取到的请求存入 requestQueue 中；
+  Handler 线程从 requestQueue 队列取出请求进行处理；
+  Handler 线程处理请求产生的响应会存放到 Processor 对应的 responseQueue 中；
+  Processor 线程从 responseQueue 中取出响应并发送给客户端。
+   */
   // channel 对应的 processor 集合，实际每个 processor 对应一个 selector 线程
+  // 也可以把这个 map 看作是 responseQueue 的集合，0.10.x 版本的时候是一个 responseQueue 对应一个 processor
   private val processors = new ConcurrentHashMap[Int, Processor]()
   val requestQueueSizeMetricName = metricNamePrefix.concat(RequestQueueSizeMetric)
   val responseQueueSizeMetricName = metricNamePrefix.concat(ResponseQueueSizeMetric)
@@ -362,6 +393,7 @@ class RequestChannel(val queueSize: Int,
       Map(ProcessorMetricTag -> processor.id.toString))
   }
 
+  // 移除 processor
   def removeProcessor(processorId: Int): Unit = {
     processors.remove(processorId)
     removeMetric(responseQueueSizeMetricName, Map(ProcessorMetricTag -> processorId.toString))
@@ -377,12 +409,15 @@ class RequestChannel(val queueSize: Int,
     requestQueue.put(request)
   }
 
+  // 关闭连接
   def closeConnection(
     request: RequestChannel.Request,
     errorCounts: java.util.Map[Errors, Integer]
   ): Unit = {
     // This case is used when the request handler has encountered an error, but the client
     // does not expect a response (e.g. when produce request has acks set to 0)
+    // 这个 case 用于当 request handler 遇到错误时，
+    // 但 client 不希望收到响应时使用（例如，当 produce 请求的 acks 设置为 0 时）
     updateErrorMetrics(request.header.apiKey, errorCounts.asScala)
     sendResponse(new RequestChannel.CloseConnectionResponse(request))
   }
@@ -393,9 +428,12 @@ class RequestChannel(val queueSize: Int,
     onComplete: Option[Send => Unit]
   ): Unit = {
     updateErrorMetrics(request.header.apiKey, response.errorCounts.asScala)
+    // 封装 SendResponse，发送消息
     sendResponse(new RequestChannel.SendResponse(
       request,
+      // 将 response 封装为 Send
       request.buildResponseSend(response),
+      // 基于 response 及 ApiVersion，封装 JsonNode
       request.responseNode(response),
       onComplete
     ))
@@ -415,9 +453,12 @@ class RequestChannel(val queueSize: Int,
 
   /**
    * Send a response back to the socket server to be sent over the network
+   * <p>
+   *   发送响应到 socket server，以便通过网络发送
    */
   private[network] def sendResponse(response: RequestChannel.Response): Unit = {
     if (isTraceEnabled) {
+      // 取到 request 对应的 header，用于日志打印
       val requestHeader = response.request.headerForLoggingOrThrottling()
       val message = response match {
         case sendResponse: SendResponse =>
@@ -436,6 +477,7 @@ class RequestChannel(val queueSize: Int,
 
     response match {
       // We should only send one of the following per request
+      // 我们应该只发送以下内容之一
       case _: SendResponse | _: NoOpResponse | _: CloseConnectionResponse =>
         val request = response.request
         val timeNanos = time.nanoseconds()
@@ -446,19 +488,31 @@ class RequestChannel(val queueSize: Int,
       case _: StartThrottlingResponse | _: EndThrottlingResponse => ()
     }
 
+    // 根据 response 获取到它对应的 processor
     val processor = processors.get(response.processor)
     // The processor may be null if it was shutdown. In this case, the connections
     // are closed, so the response is dropped.
+    // 如果 processor 为 null，说明 processor 已经关闭，此时连接已经关闭，所以直接丢弃 response
     if (processor != null) {
       processor.enqueueResponse(response)
     }
   }
 
-  /** Get the next request or block until specified time has elapsed */
-  def receiveRequest(timeout: Long): RequestChannel.BaseRequest =
+  /**
+   * Get the next request or block until specified time has elapsed
+   * <p>
+   *   获取下一个请求，或者阻塞直到指定的时间已经过去
+   */
+  def receiveRequest(timeout: Long): RequestChannel.BaseRequest = {
+    // 从 requestQueue 中拉取请求，如果没有请求，则阻塞 timeout 毫秒
     requestQueue.poll(timeout, TimeUnit.MILLISECONDS)
+  }
 
-  /** Get the next request or block until there is one */
+  /**
+   * Get the next request or block until there is one
+   * <p>
+   *   获取下一个请求，或者阻塞直到有请求
+   */
   def receiveRequest(): RequestChannel.BaseRequest =
     requestQueue.take()
 
