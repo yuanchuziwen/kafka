@@ -151,6 +151,12 @@ trait BrokerToControllerChannelManager {
  * and connect to the controller. The channel is async and runs the network connection in the background.
  * The maximum number of in-flight requests are set to one to ensure orderly response from the controller, therefore
  * care must be taken to not block on outstanding requests for too long.
+ * <p>
+ *   这个类管理 broker 和 controller 之间的连接。
+ *   它运行一个[[BrokerToControllerRequestThread]]，该线程使用 broker 的元数据缓存作为自己的元数据，
+ *   以查找并连接到 controller。
+ *   通道是异步的，并在后台运行网络连接。
+ *   最大的 in-flight requests 数量设置为 1，以确保从 controller 获取有序的响应，因此必须小心不要在未完成的请求上阻塞太长时间。
  */
 class BrokerToControllerChannelManagerImpl(
   controllerNodeProvider: ControllerNodeProvider,
@@ -165,6 +171,7 @@ class BrokerToControllerChannelManagerImpl(
   private val manualMetadataUpdater = new ManualMetadataUpdater()
   private val apiVersions = new ApiVersions()
   private val currentNodeApiVersions = NodeApiVersions.create()
+  // 一个请求线程
   private val requestThread = newRequestThread
 
   def start(): Unit = {
@@ -177,6 +184,7 @@ class BrokerToControllerChannelManagerImpl(
   }
 
   private[server] def newRequestThread = {
+    // 创建一个线程内的 networkClient 对象
     val networkClient = {
       val channelBuilder = ChannelBuilders.clientChannelBuilder(
         controllerNodeProvider.securityProtocol,

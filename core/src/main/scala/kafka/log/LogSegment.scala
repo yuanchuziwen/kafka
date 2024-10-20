@@ -39,8 +39,16 @@ import scala.math._
  * the actual messages. The index is an OffsetIndex that maps from logical offsets to physical file positions. Each
  * segment has a base offset which is an offset <= the least offset of any message in this segment and > any offset in
  * any previous segment.
+ * <p>
+ *   日志的一个段。
+ *   每个 segment 都有两个 component：一个 log 文件和一个 index 文件。
+ *   long 是一个 FileRecords，包含实际的消息。
+ *   index 是一个 OffsetIndex，从逻辑 offset 映射到物理文件位置。
+ *   每个 segment 都有一个基础 offset，这是一个 <= 该 segment 中任何消息的最小 offset，且 > 任何前一个 segment 中的 offset。
  *
  * A segment with a base offset of [base_offset] would be stored in two files, a [base_offset].index and a [base_offset].log file.
+ * <p>
+ *   一个基础 offset 为 [base_offset] 的 segment 将存储在两个文件中，一个 [base_offset].index 和一个 [base_offset].log 文件。
  *
  * @param log The file records containing log entries
  * @param lazyOffsetIndex The offset index
@@ -61,10 +69,13 @@ class LogSegment private[log] (val log: FileRecords,
                                val rollJitterMs: Long,
                                val time: Time) extends Logging {
 
+  // 一个索引文件
   def offsetIndex: OffsetIndex = lazyOffsetIndex.get
 
+  // 一个时间索引文件
   def timeIndex: TimeIndex = lazyTimeIndex.get
 
+  // 判断是否需要切换
   def shouldRoll(rollParams: RollParams): Boolean = {
     val reachedRollMs = timeWaitedForRoll(rollParams.now, rollParams.maxTimestampInMessages) > rollParams.maxSegmentMs - rollJitterMs
     size > rollParams.maxSegmentBytes - rollParams.messagesSize ||
@@ -130,8 +141,13 @@ class LogSegment private[log] (val log: FileRecords,
   /**
    * Append the given messages starting with the given offset. Add
    * an entry to the index if needed.
+   * <p>
+   *   将给定的消息附加到给定的偏移量。
+   *   如果需要，添加一个条目到索引。
    *
    * It is assumed this method is being called from within a lock.
+   * <p>
+   *   假设此方法是从锁内部调用的。
    *
    * @param largestOffset The last offset in the message set
    * @param largestTimestamp The largest timestamp in the message set.
@@ -162,6 +178,7 @@ class LogSegment private[log] (val log: FileRecords,
         maxTimestampAndOffsetSoFar = TimestampOffset(largestTimestamp, shallowOffsetOfMaxTimestamp)
       }
       // append an entry to the index (if needed)
+      // 将一条消息添加到 index 中（如果需要）
       if (bytesSinceLastIndexEntry > indexIntervalBytes) {
         offsetIndex.append(largestOffset, physicalPosition)
         timeIndex.maybeAppend(maxTimestampSoFar, offsetOfMaxTimestampSoFar)

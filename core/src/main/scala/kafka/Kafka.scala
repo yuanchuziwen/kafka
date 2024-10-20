@@ -70,6 +70,7 @@ object Kafka extends Logging {
         config,
         Time.SYSTEM,
         threadNamePrefix = None,
+        // 区别在这里，enableForwarding 表示 KafkaRaftServer 是否启用转发
         enableForwarding = false
       )
     } else {
@@ -83,7 +84,9 @@ object Kafka extends Logging {
 
   def main(args: Array[String]): Unit = {
     try {
+      // 基于入参解析 server 配置
       val serverProps = getPropsFromArgs(args)
+      // 基于 server 配置构建 server
       val server = buildServer(serverProps)
 
       try {
@@ -96,6 +99,7 @@ object Kafka extends Logging {
       }
 
       // attach shutdown handler to catch terminating signals as well as normal termination
+      // 关联 shutdown handler 以捕获终止信号以及正常终止
       Exit.addShutdownHook("kafka-shutdown-hook", {
         try server.shutdown()
         catch {
@@ -106,6 +110,7 @@ object Kafka extends Logging {
         }
       })
 
+      // 启动 server
       try server.startup()
       catch {
         case _: Throwable =>

@@ -28,13 +28,19 @@ import scala.jdk.CollectionConverters._
 /**
  * This class encapsulates a thread-safe navigable map of LogSegment instances and provides the
  * required read and write behavior on the map.
+ * <p>
+ *   当前类封装了一个线程安全的可导航的 LogSegment 实例映射，并提供了对映射上的读写行为。
  *
  * @param topicPartition the TopicPartition associated with the segments
  *                        (useful for logging purposes)
  */
 class LogSegments(topicPartition: TopicPartition) {
 
-  /* the segments of the log with key being LogSegment base offset and value being a LogSegment */
+  /*
+  * the segments of the log with key being LogSegment base offset and value being a LogSegment
+  * <p>
+  *     具有 LogSegment 基础偏移量作为键和 LogSegment 作为值的日志段。
+  */
   private val segments: ConcurrentNavigableMap[Long, LogSegment] = new ConcurrentSkipListMap[Long, LogSegment]
 
   /**

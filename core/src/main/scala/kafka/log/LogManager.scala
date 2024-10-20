@@ -45,10 +45,16 @@ import scala.annotation.nowarn
 /**
  * The entry point to the kafka log management subsystem. The log manager is responsible for log creation, retrieval, and cleaning.
  * All read and write operations are delegated to the individual log instances.
+ * <p>
+ *   kafka 日志管理子系统的入口点。
+ *   日志管理器负责日志的创建、检索和清理。所有的读写操作都委托给单个日志实例。
  *
  * The log manager maintains logs in one or more directories. New logs are created in the data directory
  * with the fewest logs. No attempt is made to move partitions after the fact or balance based on
  * size or I/O rate.
+ * <p>
+ *   日志管理器在一个或多个目录中维护日志。新日志将在日志最少的数据目录中创建。
+ *   不会尝试在事后移动分区，也不会根据大小或 I/O 速率进行平衡。
  *
  * A background thread handles log retention by periodically truncating excess log segments.
  */
@@ -81,8 +87,13 @@ class LogManager(logDirs: Seq[File],
   // Future logs are put in the directory with "-future" suffix. Future log is created when user wants to move replica
   // from one log directory to another log directory on the same broker. The directory of the future log will be renamed
   // to replace the current log of the partition after the future log catches up with the current log
+
+  // “将来的 logs” 被放在带有 “-future” 后缀的目录中。
+  // 当用户想要将 replica 从一个 log dir 移动到同一台 broker 上的另一个 log dir 时，将创建未来日志。
+  // 未来日志的 dir 将在未来日志赶上当前日志后重命名以替换分区的当前日志
   private val futureLogs = new Pool[TopicPartition, Log]()
   // Each element in the queue contains the log object to be deleted and the time it is scheduled for deletion.
+  // 该队列中的每个元素都包含要删除的日志对象和计划删除的时间。
   private val logsToBeDeleted = new LinkedBlockingQueue[(Log, Long)]()
 
   private val _liveLogDirs: ConcurrentLinkedQueue[File] = createAndValidateLogDirs(logDirs, initialOfflineDirs)
@@ -94,6 +105,11 @@ class LogManager(logDirs: Seq[File],
   // which triggers a config reload after initialization is finished (to get the latest config value).
   // See KAFKA-8813 for more detail on the race condition
   // Visible for testing
+
+  // 此映射包含正在加载和初始化的所有分区的日志。
+  // 如果这些分区的日志配置同时被更新，那么此映射中的相应条目将设置为“true”，
+  // 这将在初始化完成后触发配置重新加载（以获取最新的配置值）。
+  // 有关竞争条件的更多详细信息，请参见 KAFKA-8813
   private[log] val partitionsInitializing = new ConcurrentHashMap[TopicPartition, Boolean]().asScala
 
   def reconfigureDefaultLogConfig(logConfig: LogConfig): Unit = {
@@ -123,6 +139,7 @@ class LogManager(logDirs: Seq[File],
     logDirsSet
   }
 
+  // cleaner，用于周期性的清理日志
   @volatile private var _cleaner: LogCleaner = _
   private[kafka] def cleaner: LogCleaner = _cleaner
 
@@ -457,17 +474,20 @@ class LogManager(logDirs: Seq[File],
     /* Schedule the cleanup task to delete old logs */
     if (scheduler != null) {
       info("Starting log cleanup with a period of %d ms.".format(retentionCheckMs))
+      // log-retention 任务，用于删除旧的日志
       scheduler.schedule("kafka-log-retention",
                          cleanupLogs _,
                          delay = InitialTaskDelayMs,
                          period = retentionCheckMs,
                          TimeUnit.MILLISECONDS)
       info("Starting log flusher with a default period of %d ms.".format(flushCheckMs))
+      // log-flusher 任务，用于刷新日志
       scheduler.schedule("kafka-log-flusher",
                          flushDirtyLogs _,
                          delay = InitialTaskDelayMs,
                          period = flushCheckMs,
                          TimeUnit.MILLISECONDS)
+      // recovery-point-checkpoint 任务，用于检查点恢复点
       scheduler.schedule("kafka-recovery-point-checkpoint",
                          checkpointLogRecoveryOffsets _,
                          delay = InitialTaskDelayMs,
@@ -1112,6 +1132,10 @@ class LogManager(logDirs: Seq[File],
   /**
    * Delete any eligible logs. Return the number of segments deleted.
    * Only consider logs that are not compacted.
+   * <p>
+   *   删除任何符合条件的日志。
+   *   返回删除的段数。
+   *   只考虑未压缩的日志。
    */
   def cleanupLogs(): Unit = {
     debug("Beginning log cleanup...")
@@ -1122,6 +1146,7 @@ class LogManager(logDirs: Seq[File],
     val deletableLogs = {
       if (cleaner != null) {
         // prevent cleaner from working on same partitions when changing cleanup policy
+        // 禁止清理器在更改清理策略时在相同的分区上工作
         cleaner.pauseCleaningForNonCompactedPartitions()
       } else {
         currentLogs.filter {
@@ -1134,6 +1159,7 @@ class LogManager(logDirs: Seq[File],
       deletableLogs.foreach {
         case (topicPartition, log) =>
           debug(s"Garbage collecting '${log.name}'")
+          // 执行删除操作
           total += log.deleteOldSegments()
 
           val futureLog = futureLogs.get(topicPartition)

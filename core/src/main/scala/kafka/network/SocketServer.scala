@@ -258,9 +258,13 @@ class SocketServer(val config: KafkaConfig,
 
   /**
    * Starts processors of the provided acceptor and the acceptor itself.
+   * <p>
+   *   启动提供的 acceptor 的 processors 和 acceptor 本身。
    *
    * Before starting them, we ensure that authorizer has all the metadata to authorize
    * requests on that endpoint by waiting on the provided future.
+   * <p>
+   *   在启动之前，我们确保 authorizer 有所有的元数据来授权该 endpoint 上的请求，通过等待提供的 future。
    */
   private def startAcceptorAndProcessors(threadPrefix: String,
                                          endpoint: EndPoint,
@@ -269,9 +273,11 @@ class SocketServer(val config: KafkaConfig,
     debug(s"Wait for authorizer to complete start up on listener ${endpoint.listenerName}")
     waitForAuthorizerFuture(acceptor, authorizerFutures)
     debug(s"Start processors on listener ${endpoint.listenerName}")
+    // 先开启 processor 线程
     acceptor.startProcessors(threadPrefix)
     debug(s"Start acceptor thread on listener ${endpoint.listenerName}")
     if (!acceptor.isStarted()) {
+      // 然后再开启 acceptor 线程
       KafkaThread.nonDaemon(
         s"${threadPrefix}-kafka-socket-acceptor-${endpoint.listenerName}-${endpoint.securityProtocol}-${endpoint.port}",
         acceptor
@@ -1111,6 +1117,7 @@ private[kafka] class Processor(val id: Int,
             // 如果没有配额违规，且 channel 未被限流，则会立即取消静音。
             // 如果 channel 被限流，则只有在限流延迟已经过去时才会取消静音。
             handleChannelMuteEvent(channelId, ChannelMuteEvent.RESPONSE_SENT)
+            // 这里可以看作是提前 unmute channel，因为 NoOpResponse 不会发送给客户端，所以不会有发送操作
             tryUnmuteChannel(channelId)
 
           // 如果是 SendResponse
@@ -1132,6 +1139,7 @@ private[kafka] class Processor(val id: Int,
             // Try unmuting the channel. The channel will be unmuted only if the response has already been sent out to
             // the client.
             handleChannelMuteEvent(channelId, ChannelMuteEvent.THROTTLE_ENDED)
+            // 这里也可以看作是提前 unmute channel
             tryUnmuteChannel(channelId)
 
           // 否则，如果是其他 response 类型，抛异常
@@ -1234,6 +1242,8 @@ private[kafka] class Processor(val id: Int,
                 }
                 // 将请求交给 requestChannel 处理
                 requestChannel.sendRequest(req)
+                // 每次添加消息后，就会 mute 这个 channel
+                // 通过 mute 和 unmute 操作，kafka 保证顺序性
                 selector.mute(connectionId)
                 handleChannelMuteEvent(connectionId, ChannelMuteEvent.REQUEST_RECEIVED)
               }
@@ -1274,6 +1284,7 @@ private[kafka] class Processor(val id: Int,
         // 如果没有配额违规，且 channel 未被限流，则会立即取消静音。
         // 如果 channel 被限流，则只有在限流延迟已经过去时才会取消静音。
         handleChannelMuteEvent(send.destinationId, ChannelMuteEvent.RESPONSE_SENT)
+        // 发完消息后会尝试 unmute
         tryUnmuteChannel(send.destinationId)
       } catch {
         case e: Throwable => processChannelException(send.destinationId,
@@ -1453,6 +1464,10 @@ private[kafka] class Processor(val id: Int,
   }
 
   private def tryUnmuteChannel(connectionId: String) = {
+    /*
+    如果是 NoOpResponse，那么 processor 当看到这个 response 后就会尝试 unmute channel。
+    如果是 SendResponse，那么 processor 会当收到这个 response 的 ack 后，才会尝试 unmute channel。
+     */
     openOrClosingChannel(connectionId).foreach(c => selector.unmute(c.id))
   }
 

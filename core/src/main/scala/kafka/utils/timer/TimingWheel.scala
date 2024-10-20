@@ -36,6 +36,15 @@ import java.util.concurrent.atomic.AtomicInteger
  * A timing wheel has O(1) cost for insert/delete (start-timer/stop-timer) whereas priority queue
  * based timers, such as java.util.concurrent.DelayQueue and java.util.Timer, have O(log n)
  * insert/delete cost.
+ * <p>
+ * 一个简单的时间轮是一个计时器任务的桶的循环列表。
+ * 假设 u 为时间单位。大小为 n 的时间轮有 n 个桶，可以在 n * u 时间间隔内保存计时器任务。
+ * 每个桶保存落入相应时间范围的计时器任务。
+ * 一开始，第一个桶保存 [0, u) 的任务，第二个桶保存 [u, 2u) 的任务，以此类推，第 n 个桶保存 [u * (n -1), u * n) 的任务。
+ * 每个时间单位 u，计时器滴答一次并移动到下一个桶，然后过期其中的所有计时器任务。
+ * 因此，计时器从不会将任务插入当前时间的桶中，因为它已经过期。
+ * 计时器立即运行过期的任务。然后，清空的桶可用于下一轮，因此，如果当前桶是时间 t 的桶，则在滴答后它变为 [t + u * n, t + (n + 1) * u) 的桶。
+ * 时间轮的插入/删除（启动计时器/停止计时器）成本为 O(1)，而基于优先级队列的计时器，例如 java.util.concurrent.DelayQueue 和 java.util.Timer，插入/删除成本为 O(log n)。
  *
  * A major drawback of a simple timing wheel is that it assumes that a timer request is within
  * the time interval of n * u from the current time. If a timer request is out of this interval,
@@ -49,6 +58,14 @@ import java.util.concurrent.atomic.AtomicInteger
  * are then moved to the finer grain wheels or be executed. The insert (start-timer) cost is O(m)
  * where m is the number of wheels, which is usually very small compared to the number of requests
  * in the system, and the delete (stop-timer) cost is still O(1).
+ * <p>
+ * 简单时间轮的一个主要缺点是它假设计时器请求在当前时间的 n * u 时间间隔内。如果计时器请求超出此间隔，则为溢出。
+ * 分层时间轮处理此类溢出。
+ * 它是一个分层组织的时间轮。最低级别具有最好的时间分辨率。随着向上移动层次，时间分辨率变得更粗糙。
+ * 如果一个级别的时间轮的分辨率为 u，大小为 n，则下一个级别的分辨率应为 n * u。
+ * 在每个级别上，溢出被委托到更高级别的时间轮。当更高级别的时间轮滴答时，它会将计时器任务重新插入到较低级别。
+ * 可以根据需要创建溢出时间轮。当溢出桶中的桶过期时，其中的所有任务都会递归地重新插入计时器。
+ * 然后，任务将移动到更精细的时间轮或执行。插入（启动计时器）成本为 O(m)，其中 m 是时间轮的数量，通常与系统中的请求数量相比非常小，删除（停止计时器）成本仍为 O(1)。
  *
  * Example
  * Let's say that u is 1 and n is 3. If the start time is c,
@@ -99,20 +116,25 @@ import java.util.concurrent.atomic.AtomicInteger
 @nonthreadsafe
 private[timer] class TimingWheel(tickMs: Long, wheelSize: Int, startMs: Long, taskCounter: AtomicInteger, queue: DelayQueue[TimerTaskList]) {
 
+  // 整个时间轮能够表示的时间范围
   private[this] val interval = tickMs * wheelSize
+  // 当前层级时间轮持有的桶
   private[this] val buckets = Array.tabulate[TimerTaskList](wheelSize) { _ => new TimerTaskList(taskCounter) }
 
   private[this] var currentTime = startMs - (startMs % tickMs) // rounding down to multiple of tickMs
 
   // overflowWheel can potentially be updated and read by two concurrent threads through add().
   // Therefore, it needs to be volatile due to the issue of Double-Checked Locking pattern with JVM
+
+  // 由于 JVM 中的双重检查锁定模式的问题，overflowWheel 可能会通过 add() 被两个并发线程更新和读取，因此它需要是 volatile 的
   @volatile private[this] var overflowWheel: TimingWheel = null
 
+  // 为当前层级的时间轮创建一个新的 TimerTaskEntry
   private[this] def addOverflowWheel(): Unit = {
     synchronized {
       if (overflowWheel == null) {
         overflowWheel = new TimingWheel(
-          tickMs = interval,
+          tickMs = interval, // 上一个层级的时间轮中每个桶代表的时间间隔
           wheelSize = wheelSize,
           startMs = currentTime,
           taskCounter = taskCounter,
@@ -125,16 +147,22 @@ private[timer] class TimingWheel(tickMs: Long, wheelSize: Int, startMs: Long, ta
   def add(timerTaskEntry: TimerTaskEntry): Boolean = {
     val expiration = timerTaskEntry.expirationMs
 
+    // 如果 task 已经取消，则返回 false
     if (timerTaskEntry.cancelled) {
       // Cancelled
       false
+
+      // 如果 task 已经过期，则返回 false
     } else if (expiration < currentTime + tickMs) {
       // Already expired
       false
+
+      // 如果 task 的过期时间在当前层级时间轮的时间范围内，则将 task 添加到当前层级时间轮的桶中
     } else if (expiration < currentTime + interval) {
       // Put in its own bucket
       val virtualId = expiration / tickMs
       val bucket = buckets((virtualId % wheelSize.toLong).toInt)
+      // 添加到某一个桶内
       bucket.add(timerTaskEntry)
 
       // Set the bucket expiration time
@@ -144,22 +172,29 @@ private[timer] class TimingWheel(tickMs: Long, wheelSize: Int, startMs: Long, ta
         // and the previous buckets gets reused; further calls to set the expiration within the same wheel cycle
         // will pass in the same value and hence return false, thus the bucket with the same expiration will not
         // be enqueued multiple times.
+
+        // 需要将桶入队，因为它是一个过期的桶
+        // 我们只需要在其过期时间更改时将桶入队，即时间轮已经前进并且之前的桶被重用；
+        // 在同一个时间轮周期内进一步调用设置过期时间将传递相同的值，因此具有相同过期时间的桶不会多次入队。
         queue.offer(bucket)
       }
       true
     } else {
       // Out of the interval. Put it into the parent timer
+      // 交给上层的时间轮处理
       if (overflowWheel == null) addOverflowWheel()
       overflowWheel.add(timerTaskEntry)
     }
   }
 
   // Try to advance the clock
+  // 尝试推进时钟
   def advanceClock(timeMs: Long): Unit = {
     if (timeMs >= currentTime + tickMs) {
       currentTime = timeMs - (timeMs % tickMs)
 
       // Try to advance the clock of the overflow wheel if present
+      // 如果存在上层的时间轮，则尝试推进上层时间轮的时钟
       if (overflowWheel != null) overflowWheel.advanceClock(currentTime)
     }
   }

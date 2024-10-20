@@ -38,6 +38,9 @@ private[timer] class TimerTaskList(taskCounter: AtomicInteger) extends Delayed {
 
   // Set the bucket's expiration time
   // Returns true if the expiration time is changed
+
+  // 设置桶的过期时间
+  // 如果过期时间更改，则返回 true
   def setExpiration(expirationMs: Long): Boolean = {
     expiration.getAndSet(expirationMs) != expirationMs
   }

@@ -67,6 +67,8 @@ import scala.compat.java8.OptionConverters._
 
 /*
  * Result metadata of a log append operation on the log
+ * <p>
+ * 向日志文件中追加消息的结果元数据
  */
 case class LogAppendResult(info: LogAppendInfo, exception: Option[Throwable] = None) {
   def error: Errors = exception match {
@@ -84,6 +86,9 @@ case class LogDeleteRecordsResult(requestedOffset: Long, lowWatermark: Long, exc
 
 /**
  * Result metadata of a log read operation on the log
+ * <p>
+ *   日志读取操作的结果元数据
+ *
  * @param info @FetchDataInfo returned by the @Log read
  * @param divergingEpoch Optional epoch and end offset which indicates the largest epoch such
  *                       that subsequent records are known to diverge on the follower/consumer
@@ -158,22 +163,33 @@ case class FetchPartitionData(error: Errors = Errors.NONE,
  * instance when the broker receives a LeaderAndIsr request from the controller or a metadata
  * log record from the Quorum controller indicating that the broker should be either a leader
  * or follower of a partition.
+ * <p>
+ *   表示托管 partition state 的特征。
+ *   当 broker 从集群 controller 接收到 LeaderAndIsr 请求或元数据日志记录，
+ *   明确指示当前 broker 将成为这个 partition 的 follower 或 leader 时，
+ *   我们会创建一个具体的（active）Partition 实例，
  */
 sealed trait HostedPartition
 
 object HostedPartition {
   /**
    * This broker does not have any state for this partition locally.
+   * <p>
+   *   当前 broker 没有这个 partition 的本地状态。
    */
   final object None extends HostedPartition
 
   /**
    * This broker hosts the partition and it is online.
+   * <p>
+   *   当前 broker 持有 partition，且 partition 在线。
    */
   final case class Online(partition: Partition) extends HostedPartition
 
   /**
    * This broker hosts the partition, but it is in an offline log directory.
+   * <p>
+   *   当前 broker 持有 partition，但 partition 在离线日志目录中。
    */
   final object Offline extends HostedPartition
 }
@@ -215,15 +231,19 @@ class ReplicaManager(val config: KafkaConfig,
            threadNamePrefix: Option[String] = None) = {
     this(config, metrics, time, zkClient, scheduler, logManager, isShuttingDown,
       quotaManagers, brokerTopicStats, metadataCache, logDirFailureChannel,
+      // delayedProduce 时间轮
       DelayedOperationPurgatory[DelayedProduce](
         purgatoryName = "Produce", brokerId = config.brokerId,
         purgeInterval = config.producerPurgatoryPurgeIntervalRequests),
+      // delayedFetch 时间轮
       DelayedOperationPurgatory[DelayedFetch](
         purgatoryName = "Fetch", brokerId = config.brokerId,
         purgeInterval = config.fetchPurgatoryPurgeIntervalRequests),
+      // delayedDeleteRecords 时间轮
       DelayedOperationPurgatory[DelayedDeleteRecords](
         purgatoryName = "DeleteRecords", brokerId = config.brokerId,
         purgeInterval = config.deleteRecordsPurgatoryPurgeIntervalRequests),
+      // delayedElectLeader 时间轮
       DelayedOperationPurgatory[DelayedElectLeader](
         purgatoryName = "ElectLeader", brokerId = config.brokerId),
       threadNamePrefix, alterIsrManager)
@@ -232,6 +252,7 @@ class ReplicaManager(val config: KafkaConfig,
   /* epoch of the controller that last changed the leader */
   @volatile private[server] var controllerEpoch: Int = KafkaController.InitialControllerEpoch
   protected val localBrokerId = config.brokerId
+  // 当前 broker 维护的所有 partition
   protected val allPartitions = new Pool[TopicPartition, HostedPartition](
     valueFactory = Some(tp => HostedPartition.Online(Partition(tp, time, this)))
   )
@@ -533,6 +554,11 @@ class ReplicaManager(val config: KafkaConfig,
         // forces clients to refresh metadata to find the new location. This can happen, for example,
         // during a partition reassignment if a produce request from the client is sent to a broker after
         // the local replica has been deleted.
+
+        // 这个 topic 存在，但是当前 broker 不再是它的 replica，
+        // 所以我们返回 NOT_LEADER_OR_FOLLOWER，
+        // 强制客户端刷新元数据以查找新的位置。
+        // 例如，在分区重新分配期间，如果客户端的 produce 请求发送到了本地 replica 被删除后的 broker，则会发生这种情况。
         Left(Errors.NOT_LEADER_OR_FOLLOWER)
 
       case HostedPartition.None =>
@@ -571,10 +597,18 @@ class ReplicaManager(val config: KafkaConfig,
    * Append messages to leader replicas of the partition, and wait for them to be replicated to other replicas;
    * the callback function will be triggered either when timeout or the required acks are satisfied;
    * if the callback function itself is already synchronized on some object then pass this object to avoid deadlock.
+   * <p>
+   *   将 messages 追加到分区的 leader replica，并等待它们被复制到其他 replica；
+   *   当超时或满足所需的 acks 确认时，将触发回调函数；
+   *   如果回调函数本身已经在某个对象上同步，则传递此对象以避免死锁。
    *
    * Noted that all pending delayed check operations are stored in a queue. All callers to ReplicaManager.appendRecords()
    * are expected to call ActionQueue.tryCompleteActions for all affected partitions, without holding any conflicting
    * locks.
+   * <p>
+   *   请注意，所有挂起的延迟检查操作都存储在队列中。
+   *   所有调用 ReplicaManager.appendRecords() 的调用方都应为所有受影响的分区调用 ActionQueue.tryCompleteActions，而不持有任何冲突的锁。
+   *
    */
   def appendRecords(timeout: Long,
                     requiredAcks: Short,
@@ -585,12 +619,15 @@ class ReplicaManager(val config: KafkaConfig,
                     delayedProduceLock: Option[Lock] = None,
                     recordConversionStatsCallback: Map[TopicPartition, RecordConversionStats] => Unit = _ => (),
                     requestLocal: RequestLocal = RequestLocal.NoCaching): Unit = {
+    // 确认一下 acks 的配置是否正确（-1、0、1）
     if (isValidRequiredAcks(requiredAcks)) {
       val sTime = time.milliseconds
+      // 将消息追加到当前 broker 的本地日志（leader replica log）
       val localProduceResults = appendToLocalLog(internalTopicsAllowed = internalTopicsAllowed,
         origin, entriesPerPartition, requiredAcks, requestLocal)
       debug("Produce to local log in %d ms".format(time.milliseconds - sTime))
 
+      // 构造 ProducePartitionStatus 对象
       val produceStatus = localProduceResults.map { case (topicPartition, result) =>
         topicPartition -> ProducePartitionStatus(
           result.info.lastOffset + 1, // required offset
@@ -613,6 +650,7 @@ class ReplicaManager(val config: KafkaConfig,
               result.info.leaderHwChange match {
                 case LeaderHwChange.Increased =>
                   // some delayed operations may be unblocked after HW changed
+                  // 一些延迟操作可能在 HW 改变后被解除阻塞
                   delayedProducePurgatory.checkAndComplete(requestKey)
                   delayedFetchPurgatory.checkAndComplete(requestKey)
                   delayedDeleteRecordsPurgatory.checkAndComplete(requestKey)
@@ -630,6 +668,7 @@ class ReplicaManager(val config: KafkaConfig,
       if (delayedProduceRequestRequired(requiredAcks, entriesPerPartition, localProduceResults)) {
         // create delayed produce operation
         val produceMetadata = ProduceMetadata(requiredAcks, produceStatus)
+        // 构造一个延时 produce 的任务
         val delayedProduce = new DelayedProduce(timeout, produceMetadata, this, responseCallback, delayedProduceLock)
 
         // create a list of (topic, partition) pairs to use as keys for this delayed produce operation
@@ -897,6 +936,8 @@ class ReplicaManager(val config: KafkaConfig,
 
   /**
    * Append the messages to the local replica logs
+   * <p>
+   *   将消息追加到本地 replica 日志
    */
   private def appendToLocalLog(internalTopicsAllowed: Boolean,
                                origin: AppendOrigin,
@@ -904,6 +945,7 @@ class ReplicaManager(val config: KafkaConfig,
                                requiredAcks: Short,
                                requestLocal: RequestLocal): Map[TopicPartition, LogAppendResult] = {
     val traceEnabled = isTraceEnabled
+    // 定义一个内部方法来处理 append 失败的记录
     def processFailedRecord(topicPartition: TopicPartition, t: Throwable) = {
       val logStartOffset = onlinePartition(topicPartition).map(_.logStartOffset).getOrElse(-1L)
       brokerTopicStats.topicStats(topicPartition.topic).failedProduceRequestRate.mark()
@@ -916,22 +958,28 @@ class ReplicaManager(val config: KafkaConfig,
     if (traceEnabled)
       trace(s"Append [$entriesPerPartition] to local log")
 
+    // 遍历每个 topicPartition，将消息追加到对应的 partition
     entriesPerPartition.map { case (topicPartition, records) =>
+      // 指标标记
       brokerTopicStats.topicStats(topicPartition.topic).totalProduceRequestRate.mark()
       brokerTopicStats.allTopicsStats.totalProduceRequestRate.mark()
 
       // reject appending to internal topics if it is not allowed
+      // 如果本次追加的是内部 topic，并且不允许追加到内部 topic，则返回错误
       if (Topic.isInternal(topicPartition.topic) && !internalTopicsAllowed) {
         (topicPartition, LogAppendResult(
           LogAppendInfo.UnknownLogAppendInfo,
           Some(new InvalidTopicException(s"Cannot append to internal topic ${topicPartition.topic}"))))
       } else {
         try {
+          // 获取到对应的 partition 对象
           val partition = getPartitionOrException(topicPartition)
+          // 将消息追加到 leader replica 的日志中
           val info = partition.appendRecordsToLeader(records, origin, requiredAcks, requestLocal)
           val numAppendedMessages = info.numMessages
 
           // update stats for successfully appended bytes and messages as bytesInRate and messageInRate
+          // 更新成功追加的字节数和消息数的指标，作为 bytesInRate 和 messageInRate
           brokerTopicStats.topicStats(topicPartition.topic).bytesInRate.mark(records.sizeInBytes)
           brokerTopicStats.allTopicsStats.bytesInRate.mark(records.sizeInBytes)
           brokerTopicStats.topicStats(topicPartition.topic).messagesInRate.mark(numAppendedMessages)
@@ -945,12 +993,16 @@ class ReplicaManager(val config: KafkaConfig,
         } catch {
           // NOTE: Failed produce requests metric is not incremented for known exceptions
           // it is supposed to indicate un-expected failures of a broker in handling a produce request
+
+          // 注意：已知异常不会增加失败的 produce 请求指标
+          // 它应该表示 broker 在处理 produce 请求时的意外失败
           case e@ (_: UnknownTopicOrPartitionException |
                    _: NotLeaderOrFollowerException |
                    _: RecordTooLargeException |
                    _: RecordBatchTooLargeException |
                    _: CorruptRecordException |
                    _: KafkaStorageException) =>
+            // 组成一个 map
             (topicPartition, LogAppendResult(LogAppendInfo.UnknownLogAppendInfo, Some(e)))
           case rve: RecordValidationException =>
             val logStartOffset = processFailedRecord(topicPartition, rve.invalidException)

@@ -36,6 +36,9 @@ import scala.collection.mutable.ArrayBuffer
 
 /**
  * The source of an append to the log. This is used when determining required validations.
+ * <p>
+ *   像 log 追加消息的 source。
+ *   这在确定需要的验证方式时使用。
  */
 private[kafka] sealed trait AppendOrigin
 private[kafka] object AppendOrigin {
@@ -43,6 +46,11 @@ private[kafka] object AppendOrigin {
   /**
    * The log append came through replication from the leader. This typically implies minimal validation.
    * Particularly, we do not decompress record batches in order to validate records individually.
+   * <p>
+   *   日志追加通过 leader 的复制而来。
+   *   这通常意味着最小的验证。
+   *   特别地，我们不会解压记录批次以验证单独的记录。
+   *
    */
   case object Replication extends AppendOrigin
 
@@ -50,16 +58,24 @@ private[kafka] object AppendOrigin {
    * The log append came from either the group coordinator or the transaction coordinator. We validate
    * producer epochs for normal log entries (specifically offset commits from the group coordinator) and
    * we validate coordinate end transaction markers from the transaction coordinator.
+   * <p>
+   *   日志追加来自 group coordinator 或 transaction coordinator。
+   *   我们验证普通日志 entries 的 producer epochs（特别是 group coordinator 的 offset 提交），
+   *   并验证 transaction coordinator 的 coordinate end transaction markers。
    */
   case object Coordinator extends AppendOrigin
 
   /**
    * The log append came from the client, which implies full validation.
+   * <p>
+   *   日志追加来自 client，这意味着完全验证。
    */
   case object Client extends AppendOrigin
 
   /**
    * The log append come from the raft leader, which implies the offsets has been assigned
+   * <p>
+   *   日志追加来自 raft leader，这意味着偏移量已经被分配。
    */
   case object RaftLeader extends AppendOrigin
 }
@@ -73,13 +89,25 @@ private[log] object LogValidator extends Logging {
    *    starting from 0.
    * 3. When magic value >= 1, validate and maybe overwrite timestamps of messages.
    * 4. Declared count of records in DefaultRecordBatch must match number of valid records contained therein.
+   * <p>
+   *   更新这个消息集的偏移量，并对消息进行进一步验证，包括：
+   *   1. 用于压缩主题的消息必须有键
+   *   2. 当 magic 值 >= 1 时，压缩消息集的内部消息必须具有从 0 开始的单调递增偏移量。
+   *   3. 当 magic 值 >= 1 时，验证并可能覆盖消息的时间戳。
+   *   4. DefaultRecordBatch 中声明的记录数必须与其中包含的有效记录数相匹配。
    *
    * This method will convert messages as necessary to the topic's configured message format version. If no format
    * conversion or value overwriting is required for messages, this method will perform in-place operations to
    * avoid expensive re-compression.
+   * <p>
+   *   此方法将根据需要将消息转换为主题配置的消息格式版本。
+   *   如果消息不需要进行格式转换或值覆盖，此方法将执行原地操作以避免昂贵的重新压缩。
    *
    * Returns a ValidationAndOffsetAssignResult containing the validated message set, maximum timestamp, the offset
    * of the shallow message with the max timestamp and a boolean indicating whether the message sizes may have changed.
+   * <p>
+   *   返回一个 ValidationAndOffsetAssignResult，其中包含验证的消息集、最大时间戳、具有最大时间戳的浅消息的偏移量，
+   *   以及一个指示消息大小是否可能已更改的布尔值。
    */
   private[log] def validateMessagesAndAssignOffsets(records: MemoryRecords,
                                                     topicPartition: TopicPartition,
@@ -102,10 +130,12 @@ private[log] object LogValidator extends Logging {
       if (!records.hasMatchingMagic(magic))
         convertAndAssignOffsetsNonCompressed(records, topicPartition, offsetCounter, compactedTopic, time, now, timestampType,
           timestampDiffMaxMs, magic, partitionLeaderEpoch, origin, brokerTopicStats)
-      else
+      else {
         // Do in-place validation, offset assignment and maybe set timestamp
+        // 原地验证、偏移量分配和可能设置时间戳
         assignOffsetsNonCompressed(records, topicPartition, offsetCounter, now, compactedTopic, timestampType, timestampDiffMaxMs,
           partitionLeaderEpoch, origin, magic, brokerTopicStats)
+      }
     } else {
       validateMessagesAndAssignOffsetsCompressed(records, topicPartition, offsetCounter, time, now, sourceCodec,
         targetCodec, compactedTopic, magic, timestampType, timestampDiffMaxMs, partitionLeaderEpoch, origin,
@@ -351,6 +381,11 @@ private[log] object LogValidator extends Logging {
    * 1. Source and target compression codec are different
    * 2. When the target magic is not equal to batches' magic, meaning format conversion is needed.
    * 3. When the target magic is equal to V0, meaning absolute offsets need to be re-assigned.
+   * <p>
+   *   在以下情况下，我们无法进行原地分配：
+   *   1. 源和目标压缩编解码器不同
+   *   2. 当目标 magic 不等于批次的 magic 时，意味着需要进行格式转换。
+   *   3. 当目标 magic 等于 V0 时，意味着需要重新分配绝对偏移量。
    */
   def validateMessagesAndAssignOffsetsCompressed(records: MemoryRecords,
                                                  topicPartition: TopicPartition,

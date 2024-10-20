@@ -255,11 +255,13 @@ case object SnapshotGenerated extends LogStartOffsetIncrementReason {
  *                                  will be deleted to avoid ID conflicts upon re-upgrade.
  */
 @threadsafe
-class Log(@volatile private var _dir: File,
+class Log(@volatile private var _dir: File, // log 对应的磁盘目录，此目录下存放了每个 logSegment 对应的日志文件和索引文件
           @volatile var config: LogConfig,
-          val segments: LogSegments,
+          val segments: LogSegments, // 用于管理 LogSegment 集合的跳表
           @volatile var logStartOffset: Long,
-          @volatile var recoveryPoint: Long,
+          @volatile var recoveryPoint: Long, // 指定恢复操作的起始 offset，
+                                             // recoveryPoint 之前的 message 都已经刷新到磁盘上持久存储；
+                                             // 而其后的消息则不一定，出现宕机时可能会丢失
           @volatile var nextOffsetMetadata: LogOffsetMetadata,
           scheduler: Scheduler,
           brokerTopicStats: BrokerTopicStats,
@@ -277,6 +279,7 @@ class Log(@volatile private var _dir: File,
   this.logIdent = s"[Log partition=$topicPartition, dir=${dir.getParent}] "
 
   /* A lock that guards all modifications to the log */
+  // 可能存在多个 handler 线程并发向同一个 log 追加消息，所以对 log 的修改操作需要进行同步
   private val lock = new Object
 
   // The memory mapped buffer for index files of this log will be closed with either delete() or closeHandlers()
@@ -724,6 +727,8 @@ class Log(@volatile private var _dir: File,
 
   /**
    * Append this message set to the active segment of the log, assigning offsets and Partition Leader Epochs
+   * <p>
+   *   将该 message set 追加到 log 的 active segment 中，分配 offset 和 Partition Leader Epochs
    *
    * @param records The records to append
    * @param origin Declares the origin of the append which affects required validations
@@ -737,7 +742,9 @@ class Log(@volatile private var _dir: File,
                      origin: AppendOrigin = AppendOrigin.Client,
                      interBrokerProtocolVersion: ApiVersion = ApiVersion.latestVersion,
                      requestLocal: RequestLocal = RequestLocal.NoCaching): LogAppendInfo = {
+    // 根据 origin 是否为 RaftLeader 来决定是否需要 validateAndAssignOffsets
     val validateAndAssignOffsets = origin != AppendOrigin.RaftLeader
+    // 将消息追加到本地 log 中
     append(records, origin, interBrokerProtocolVersion, validateAndAssignOffsets, leaderEpoch, Some(requestLocal), ignoreRecordSize = false)
   }
 
@@ -761,9 +768,13 @@ class Log(@volatile private var _dir: File,
 
   /**
    * Append this message set to the active segment of the log, rolling over to a fresh segment if necessary.
+   * <p>
+   *   将该 message set 追加到 log 的 active segment 中，如果有必要则滚动到一个新的 segment
    *
    * This method will generally be responsible for assigning offsets to the messages,
    * however if the assignOffsets=false flag is passed we will only check that the existing offsets are valid.
+   * <p>
+   *   该方法通常负责为消息分配 offset，但是如果传递了 assignOffsets=false 标志，我们将只检查现有的 offset 是否有效
    *
    * @param records The log records to append
    * @param origin Declares the origin of the append which affects required validations
@@ -786,27 +797,40 @@ class Log(@volatile private var _dir: File,
                      ignoreRecordSize: Boolean): LogAppendInfo = {
     // We want to ensure the partition metadata file is written to the log dir before any log data is written to disk.
     // This will ensure that any log data can be recovered with the correct topic ID in the case of failure.
+
+    // 我们希望在将任何日志数据写入磁盘之前，将分区元数据文件写入日志目录。
+    // 这将确保在发生故障的情况下，可以使用正确的 topic ID 恢复任何日志数据
     maybeFlushMetadataFile()
 
+    // 分析并验证记录
+    // 对 memoryRecords 中的 message 进行验证，并返回 LogAppendInfo 对象
+    // 其中封装了 memoryRecords 中第一个消息的 offset、最后一个消息的 offset，压缩方式、时间戳等
     val appendInfo = analyzeAndValidateRecords(records, origin, ignoreRecordSize, leaderEpoch)
 
     // return if we have no valid messages or if this is a duplicate of the last appended entry
+    // 如果没有有效的消息或者这是最后一个追加的条目的重复，则返回
     if (appendInfo.shallowCount == 0) appendInfo
     else {
 
       // trim any invalid bytes or partial messages before appending it to the on-disk log
+      // 清除未验证通过的 message
       var validRecords = trimInvalidBytes(records, appendInfo)
 
       // they are valid, insert them in the log
       lock synchronized {
         maybeHandleIOException(s"Error while appending records to $topicPartition in dir ${dir.getParent}") {
+          // 验证 memory mapped buffer 是否已关闭
           checkIfMemoryMappedBufferClosed()
+          // 如果需要验证并且分配 offset
+          // 只要 origin != RAFT，就需要
           if (validateAndAssignOffsets) {
             // assign offsets to the message set
+            // 为消息集分配 offset
             val offset = new LongRef(nextOffsetMetadata.messageOffset)
             appendInfo.firstOffset = Some(LogOffsetMetadata(offset.value))
             val now = time.milliseconds
             val validateAndOffsetAssignResult = try {
+              // 针对内部压缩消息做进一步验证、消息格式转换、调整 magic 值、修改时间戳等一系列操作；并为 message 分配 offset
               LogValidator.validateMessagesAndAssignOffsets(validRecords,
                 topicPartition,
                 offset,
@@ -833,11 +857,13 @@ class Log(@volatile private var _dir: File,
             appendInfo.offsetOfMaxTimestamp = validateAndOffsetAssignResult.shallowOffsetOfMaxTimestamp
             appendInfo.lastOffset = offset.value - 1
             appendInfo.recordConversionStats = validateAndOffsetAssignResult.recordConversionStats
+            // 如果配置了 LOG_APPEND_TIME，则更新 logAppendTime
             if (config.messageTimestampType == TimestampType.LOG_APPEND_TIME)
               appendInfo.logAppendTime = now
 
             // re-validate message sizes if there's a possibility that they have changed (due to re-compression or message
             // format conversion)
+            // 如果可能已更改消息大小（由于重新压缩或消息格式转换），则重新验证消息大小
             if (!ignoreRecordSize && validateAndOffsetAssignResult.messageSizeMaybeChanged) {
               validRecords.batches.forEach { batch =>
                 if (batch.sizeInBytes > config.maxMessageSize) {
@@ -852,6 +878,7 @@ class Log(@volatile private var _dir: File,
             }
           } else {
             // we are taking the offsets we are given
+            // 我们正在使用给定的 offset
             if (!appendInfo.offsetsMonotonic)
               throw new OffsetsOutOfOrderException(s"Out of order offsets found in append to $topicPartition: " +
                 records.records.asScala.map(_.offset))
@@ -860,6 +887,9 @@ class Log(@volatile private var _dir: File,
               // we may still be able to recover if the log is empty
               // one example: fetching from log start offset on the leader which is not batch aligned,
               // which may happen as a result of AdminClient#deleteRecords()
+
+              // 如果日志为空，我们仍然可能能够恢复
+              // 一个例子：从不是批量对齐的 leader 上的 log start offset 获取，这可能是由于 AdminClient#deleteRecords() 导致的
               val firstOffset = appendInfo.firstOffset match {
                 case Some(offsetMetadata) => offsetMetadata.messageOffset
                 case None => records.batches.asScala.head.baseOffset()
@@ -876,6 +906,7 @@ class Log(@volatile private var _dir: File,
           }
 
           // update the epoch cache with the epoch stamped onto the message by the leader
+          // 使用 leader 附加到消息上的 epoch 更新 epoch cache
           validRecords.batches.forEach { batch =>
             if (batch.magic >= RecordBatch.MAGIC_VALUE_V2) {
               maybeAssignEpochStartOffset(batch.partitionLeaderEpoch, batch.baseOffset)
@@ -883,6 +914,10 @@ class Log(@volatile private var _dir: File,
               // In partial upgrade scenarios, we may get a temporary regression to the message format. In
               // order to ensure the safety of leader election, we clear the epoch cache so that we revert
               // to truncation by high watermark after the next leader election.
+
+              // 在部分升级场景中，我们可能会暂时回退到消息格式。
+              // 为了确保 leader 选举的安全性，我们清除 epoch cache，
+              // 以便在下一次 leader 选举后恢复到高水位线截断
               leaderEpochCache.filter(_.nonEmpty).foreach { cache =>
                 warn(s"Clearing leader epoch cache after unexpected append with message format v${batch.magic}")
                 cache.clearAndFlush()
@@ -897,6 +932,7 @@ class Log(@volatile private var _dir: File,
           }
 
           // maybe roll the log if this segment is full
+          // 获取 activeSegment，此过程可能分配新的 segment
           val segment = maybeRoll(validRecords.sizeInBytes, appendInfo)
 
           val logOffsetMetadata = LogOffsetMetadata(
@@ -906,6 +942,8 @@ class Log(@volatile private var _dir: File,
 
           // now that we have valid records, offsets assigned, and timestamps updated, we need to
           // validate the idempotent/transactional state of the producers and collect some metadata
+
+          // 现在我们有了有效的记录、分配的 offset 和更新的时间戳，我们需要验证生产者的幂等性/事务状态并收集一些元数据
           val (updatedProducers, completedTxns, maybeDuplicate) = analyzeAndValidateProducerState(
             logOffsetMetadata, validRecords, origin)
 
@@ -917,10 +955,12 @@ class Log(@volatile private var _dir: File,
               appendInfo.logStartOffset = logStartOffset
             case None =>
               // Before appending update the first offset metadata to include segment information
+              // 在追加之前，更新第一个 offset metadata 以包含 segment 信息
               appendInfo.firstOffset = appendInfo.firstOffset.map { offsetMetadata =>
                 offsetMetadata.copy(segmentBaseOffset = segment.baseOffset, relativePositionInSegment = segment.size)
               }
 
+              // 将消息添加到 segment 对象
               segment.append(largestOffset = appendInfo.lastOffset,
                 largestTimestamp = appendInfo.maxTimestamp,
                 shallowOffsetOfMaxTimestamp = appendInfo.offsetOfMaxTimestamp,
@@ -932,6 +972,12 @@ class Log(@volatile private var _dir: File,
               // will be cleaned up after the log directory is recovered. Note that the end offset of the
               // ProducerStateManager will not be updated and the last stable offset will not advance
               // if the append to the transaction index fails.
+
+              // 增加 log end offset。我们在追加后立即执行此操作，因为下面的事务索引写入可能会失败，
+              // 我们希望确保未来追加的 offset 仍然单调增长。
+              // 在恢复 log 目录后，将清理产生的事务索引不一致性。
+              // 请注意，如果向事务索引追加失败，则 ProducerStateManager 的 end offset 不会更新，
+              // 并且最后的稳定 offset 不会前进
               updateLogEndOffset(appendInfo.lastOffset + 1)
 
               // update the producer state
@@ -957,6 +1003,7 @@ class Log(@volatile private var _dir: File,
                 s"next offset: ${nextOffsetMetadata.messageOffset}, " +
                 s"and messages: $validRecords")
 
+              // 刷盘，将 recoverPoint ～ LEO 的全部内容刷盘
               if (unflushedMessages >= config.flushInterval) flush()
           }
           appendInfo
@@ -1088,6 +1135,20 @@ class Log(@volatile private var _dir: File,
    * <li> Whether the offsets are monotonically increasing
    * <li> Whether any compression codec is used (if many are used, then the last one is given)
    * </ol>
+   *
+   * <p>
+   *   校验以下内容：
+   *   1. 每条消息的 CRC 是否匹配
+   *   2. 每条消息的大小是否有效（如果 ignoreRecordSize 为 false）
+   *   3. 传入的记录批次的序列号是否与现有状态和彼此一致
+   *
+   *   还计算以下数量：
+   *   1. 消息集中的第一个 offset
+   *   2. 消息集中的最后一个 offset
+   *   3. 消息数量
+   *   4. 有效字节数
+   *   5. offset 是否单调递增
+   *   6. 是否使用了任何压缩编解码器（如果使用了多个，则给出最后一个）
    */
   private def analyzeAndValidateRecords(records: MemoryRecords,
                                         origin: AppendOrigin,
@@ -1110,6 +1171,7 @@ class Log(@volatile private var _dir: File,
         throw new InvalidRecordException("Append from Raft leader did not set the batch epoch correctly")
       }
       // we only validate V2 and higher to avoid potential compatibility issues with older clients
+      // 我们只验证 V2 及更高版本，以避免与旧客户端的潜在兼容性问题
       if (batch.magic >= RecordBatch.MAGIC_VALUE_V2 && origin == AppendOrigin.Client && batch.baseOffset != 0)
         throw new InvalidRecordException(s"The baseOffset of the record batch in the append to $topicPartition should " +
           s"be 0, but it is ${batch.baseOffset}")
@@ -1120,6 +1182,12 @@ class Log(@volatile private var _dir: File,
       // When appending to the leader, we will update LogAppendInfo.baseOffset with the correct value. In the follower
       // case, validation will be more lenient.
       // Also indicate whether we have the accurate first offset or not
+
+      // 如果是第一条消息，则更新第一个 offset。
+      // 对于低于 2 的 magic 版本，我们使用最后一个 offset 来避免需要解压数据（最后一个 offset 可以直接从包装消息中获取）。
+      // 对于 magic 版本 2，我们可以直接从批处理头获取第一个 offset。
+      // 当追加到 leader 时，我们将使用正确的值更新 LogAppendInfo.baseOffset。在 follower 情况下，验证将更宽松。
+      // 还指示我们是否有准确的第一个 offset
       if (!readFirstMessage) {
         if (batch.magic >= RecordBatch.MAGIC_VALUE_V2)
           firstOffset = Some(LogOffsetMetadata(batch.baseOffset))
@@ -1128,6 +1196,7 @@ class Log(@volatile private var _dir: File,
       }
 
       // check that offsets are monotonically increasing
+      // 检查 offset 是否单调递增
       if (lastOffset >= batch.lastOffset)
         monotonic = false
 
@@ -1208,6 +1277,8 @@ class Log(@volatile private var _dir: File,
 
   /**
    * Read messages from the log.
+   * <p>
+   *   从 log 中读取消息
    *
    * @param startOffset The offset to begin reading at
    * @param maxLength The maximum number of bytes to read
@@ -1228,6 +1299,9 @@ class Log(@volatile private var _dir: File,
 
       // Because we don't use the lock for reading, the synchronization is a little bit tricky.
       // We create the local variables to avoid race conditions with updates to the log.
+
+      // 因为我们不使用锁来读取，所以同步有点棘手。
+      // 我们创建本地变量以避免与 log 的更新发生竞争条件
       val endOffsetMetadata = nextOffsetMetadata
       val endOffset = endOffsetMetadata.messageOffset
       var segmentOpt = segments.floorSegment(startOffset)
@@ -1251,6 +1325,10 @@ class Log(@volatile private var _dir: File,
         // Do the read on the segment with a base offset less than the target offset
         // but if that segment doesn't contain any messages with an offset greater than that
         // continue to read from successive segments until we get some messages or we reach the end of the log
+
+        // 在具有小于目标 offset 的基础 offset 的 segment 上执行读取，
+        // 但是如果该 segment 不包含任何 offset 大于该 offset 的消息，
+        // 则继续从连续的 segment 中读取，直到我们获得一些消息或达到 log 的末尾
         var fetchDataInfo: FetchDataInfo = null
         while (fetchDataInfo == null && segmentOpt.isDefined) {
           val segment = segmentOpt.get
@@ -1272,7 +1350,10 @@ class Log(@volatile private var _dir: File,
         else {
           // okay we are beyond the end of the last segment with no data fetched although the start offset is in range,
           // this can happen when all messages with offset larger than start offsets have been deleted.
+
           // In this case, we will return the empty set with log end offset metadata
+          // 好吧，我们超出了最后一个 segment 的末尾，没有获取任何数据，尽管起始 offset 在范围内，
+          // 当所有 offset 大于起始 offset 的消息都被删除时，就会发生这种情况。
           FetchDataInfo(nextOffsetMetadata, MemoryRecords.EMPTY)
         }
       }
@@ -1587,6 +1668,8 @@ class Log(@volatile private var _dir: File,
 
   /**
    * Roll the log over to a new empty log segment if necessary.
+   * <p>
+   *   如果需要，将日志滚动到新的空日志段。
    *
    * @param messagesSize The messages set size in bytes.
    * @param appendInfo log append information
@@ -1606,6 +1689,7 @@ class Log(@volatile private var _dir: File,
     val maxTimestampInMessages = appendInfo.maxTimestamp
     val maxOffsetInMessages = appendInfo.lastOffset
 
+    // 判断是否需要滚动日志段
     if (segment.shouldRoll(RollParams(config, appendInfo, messagesSize, now))) {
       debug(s"Rolling new log segment (log_size = ${segment.size}/${config.segmentSize}}, " +
         s"offset_index_size = ${segment.offsetIndex.entries}/${segment.offsetIndex.maxEntries}, " +
@@ -1638,6 +1722,9 @@ class Log(@volatile private var _dir: File,
   /**
    * Roll the log over to a new active segment starting with the current logEndOffset.
    * This will trim the index to the exact size of the number of entries it currently contains.
+   * <p>
+   *   将日志滚动到一个新的活动段，从当前 logEndOffset 开始。
+   *   这将把索引修剪到它当前包含的条目数量的确切大小。
    *
    * @return The newly rolled segment
    */

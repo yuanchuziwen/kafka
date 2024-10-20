@@ -220,6 +220,7 @@ public class ProduceRequest extends AbstractRequest {
     public void clearPartitionRecords() {
         // lazily initialize partitionSizes.
         partitionSizes();
+        // 将成员变量 data 显式的设置为 null
         data = null;
     }
 

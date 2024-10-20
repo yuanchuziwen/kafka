@@ -83,6 +83,9 @@ object KafkaServer {
 /**
  * Represents the lifecycle of a single Kafka broker. Handles all functionality required
  * to start up and shutdown a single Kafka node.
+ * <p>
+ *   代表单个 Kafka broker 的生命周期。
+ *   处理启动和关闭单个 Kafka 节点所需的所有功能。
  */
 class KafkaServer(
   val config: KafkaConfig,
@@ -91,6 +94,7 @@ class KafkaServer(
   enableForwarding: Boolean = false
 ) extends KafkaBroker with Server {
 
+  // 3 个标记位
   private val startupComplete = new AtomicBoolean(false)
   private val isShuttingDown = new AtomicBoolean(false)
   private val isStartingUp = new AtomicBoolean(false)
@@ -104,12 +108,18 @@ class KafkaServer(
   var kafkaYammerMetrics: KafkaYammerMetrics = null
   var metrics: Metrics = null
 
+  // 数据平面的 request processor
   var dataPlaneRequestProcessor: KafkaApis = null
+  // 控制平面的 request processor
   var controlPlaneRequestProcessor: KafkaApis = null
 
   var authorizer: Option[Authorizer] = None
+  // 用于处理网络请求的 socket server
   var socketServer: SocketServer = null
+
+  // 用于处理数据平面请求的 request handler 线程池
   var dataPlaneRequestHandlerPool: KafkaRequestHandlerPool = null
+  // 用于处理控制平面请求的 request handler 线程池
   var controlPlaneRequestHandlerPool: KafkaRequestHandlerPool = null
 
   var logDirFailureChannel: LogDirFailureChannel = null
@@ -124,6 +134,7 @@ class KafkaServer(
   var credentialProvider: CredentialProvider = null
   var tokenCache: DelegationTokenCache = null
 
+  // consumer group coordinator
   var groupCoordinator: GroupCoordinator = null
 
   var transactionCoordinator: TransactionCoordinator = null
@@ -177,11 +188,15 @@ class KafkaServer(
   /**
    * Start up API for bringing up a single instance of the Kafka server.
    * Instantiates the LogManager, the SocketServer and the request handlers - KafkaRequestHandlers
+   * <p>
+   *   启动 Kafka 服务器的 API，用于启动单个 Kafka 服务器实例。
+   *   实例化 LogManager、SocketServer 和请求处理程序 - KafkaRequestHandlers
    */
   override def startup(): Unit = {
     try {
       info("starting")
 
+      // 一些标记位感知
       if (isShuttingDown.get)
         throw new IllegalStateException("Kafka server is still shutting down, cannot re-start!")
 
@@ -193,16 +208,19 @@ class KafkaServer(
         _brokerState = BrokerState.STARTING
 
         /* setup zookeeper */
+        // 初始化 zkClient
         initZkClient(time)
         configRepository = new ZkConfigRepository(new AdminZkClient(zkClient))
 
         /* initialize features */
+        // 初始化特性，用来感知 zk 的 feature 变更
         _featureChangeListener = new FinalizedFeatureChangeListener(featureCache, _zkClient)
         if (config.isFeatureVersioningSupported) {
           _featureChangeListener.initOrThrow(config.zkConnectionTimeoutMs)
         }
 
         /* Get or create cluster_id */
+        // 获取或创建 cluster_id
         _clusterId = getOrGenerateClusterId(zkClient)
         info(s"Cluster ID = ${clusterId}")
 
@@ -217,21 +235,25 @@ class KafkaServer(
         }
 
         /* check cluster id */
+        // 检查 cluster id 是否一致
         if (preloadedBrokerMetadataCheckpoint.clusterId.isDefined && preloadedBrokerMetadataCheckpoint.clusterId.get != clusterId)
           throw new InconsistentClusterIdException(
             s"The Cluster ID ${clusterId} doesn't match stored clusterId ${preloadedBrokerMetadataCheckpoint.clusterId} in meta.properties. " +
             s"The broker is trying to join the wrong cluster. Configured zookeeper.connect may be wrong.")
 
         /* generate brokerId */
+        // 生成 brokerId
         config.brokerId = getOrGenerateBrokerId(preloadedBrokerMetadataCheckpoint)
         logContext = new LogContext(s"[KafkaServer id=${config.brokerId}] ")
         this.logIdent = logContext.logPrefix
 
         // initialize dynamic broker configs from ZooKeeper. Any updates made after this will be
         // applied after DynamicConfigManager starts.
+        // 从 ZooKeeper 初始化动态 broker 配置。此后进行的任何更新都将在 DynamicConfigManager 启动后应用。
         config.dynamicConfig.initialize(zkClient)
 
         /* start scheduler */
+        // 启动 scheduler
         kafkaScheduler = new KafkaScheduler(config.backgroundThreads)
         kafkaScheduler.startup()
 
@@ -243,6 +265,7 @@ class KafkaServer(
         /* register broker metrics */
         _brokerTopicStats = new BrokerTopicStats
 
+        // 初始化 quotaManagers 配额管理器
         quotaManagers = QuotaFactory.instantiate(config, metrics, time, threadNamePrefix.getOrElse(""))
         KafkaBroker.notifyClusterListeners(clusterId, kafkaMetricsReporters ++ metrics.reporters.asScala)
 
@@ -258,9 +281,12 @@ class KafkaServer(
         metadataCache = MetadataCache.zkMetadataCache(config.brokerId)
         // Enable delegation token cache for all SCRAM mechanisms to simplify dynamic update.
         // This keeps the cache up-to-date if new SCRAM mechanisms are enabled dynamically.
+        // 启用 delegation token cache 以简化动态更新。
+        // 如果动态启用了新的 SCRAM 机制，则这会使缓存保持最新。
         tokenCache = new DelegationTokenCache(ScramMechanism.mechanismNames)
         credentialProvider = new CredentialProvider(ScramMechanism.mechanismNames, tokenCache)
 
+        // broker 到 controller 的一个专门的 manager，内部会再开一个线程来维护一个 networkClient 负责进行通信
         clientToControllerChannelManager = BrokerToControllerChannelManager(
           controllerNodeProvider = MetadataCacheControllerNodeProvider(config, metadataCache),
           time = time,
@@ -269,6 +295,7 @@ class KafkaServer(
           channelName = "forwarding",
           threadNamePrefix = threadNamePrefix,
           retryTimeoutMs = config.requestTimeoutMs.longValue)
+        // 启动内部的 io 线程
         clientToControllerChannelManager.start()
 
         /* start forwarding manager */
@@ -292,10 +319,17 @@ class KafkaServer(
         //
         // Note that we allow the use of KRaft mode controller APIs when forwarding is enabled
         // so that the Envelope request is exposed. This is only used in testing currently.
+
+        // 创建并开启 socket server 的 acceptor 线程，以便知道绑定的端口。
+        // 延迟启动处理器，直到初始化序列的末尾，以确保在处理身份验证之前已加载凭据。
+
+        // 注意：当启用转发时，我们允许使用 KRaft 模式的 controller API，以便暴露 Envelope 请求。
+        // 目前仅在测试中使用。
         socketServer = new SocketServer(config, metrics, time, credentialProvider, apiVersionManager)
         socketServer.startup(startProcessingRequests = false)
 
         /* start replica manager */
+        // 创建并开启处理 isr 集合变更d manager
         alterIsrManager = if (config.interBrokerProtocolVersion.isAlterIsrSupported) {
           AlterIsrManager(
             config = config,
@@ -312,6 +346,7 @@ class KafkaServer(
         }
         alterIsrManager.start()
 
+        // 创建并开启 replica 管理器
         _replicaManager = createReplicaManager(isShuttingDown)
         replicaManager.startup()
 
@@ -333,10 +368,12 @@ class KafkaServer(
 
         /* start group coordinator */
         // Hardcode Time.SYSTEM for now as some Streams tests fail otherwise, it would be good to fix the underlying issue
+        // 开启 group coordinator
         groupCoordinator = GroupCoordinator(config, replicaManager, Time.SYSTEM, metrics)
         groupCoordinator.startup(() => zkClient.getTopicPartitionCount(Topic.GROUP_METADATA_TOPIC_NAME).getOrElse(config.offsetsTopicPartitions))
 
         /* create producer ids manager */
+        // 创建 producer ids 管理器
         val producerIdManager = if (config.interBrokerProtocolVersion.isAllocateProducerIdsSupported) {
           ProducerIdManager.rpc(
             config.brokerId,
@@ -349,12 +386,14 @@ class KafkaServer(
         }
         /* start transaction coordinator, with a separate background thread scheduler for transaction expiration and log loading */
         // Hardcode Time.SYSTEM for now as some Streams tests fail otherwise, it would be good to fix the underlying issue
+        // 开启 transaction coordinator
         transactionCoordinator = TransactionCoordinator(config, replicaManager, new KafkaScheduler(threads = 1, threadNamePrefix = "transaction-log-manager-"),
           () => producerIdManager, metrics, metadataCache, Time.SYSTEM)
         transactionCoordinator.startup(
           () => zkClient.getTopicPartitionCount(Topic.TRANSACTION_STATE_TOPIC_NAME).getOrElse(config.transactionTopicPartitions))
 
         /* start auto topic creation manager */
+        // 开启 auto topic creation manager
         this.autoTopicCreationManager = AutoTopicCreationManager(
           config,
           metadataCache,
@@ -385,11 +424,17 @@ class KafkaServer(
             KafkaServer.MIN_INCREMENTAL_FETCH_SESSION_EVICTION_MS))
 
         /* start processing requests */
+        // 开始处理请求
         val zkSupport = ZkSupport(adminManager, kafkaController, zkClient, forwardingManager, metadataCache)
+        // 创建 dataPlaneRequestProcessor，即处理数据平面请求的 KafkaApis；它是一个无状态的对象，可以再 requestHandler 之间共享
+        // 几乎各个 manager 都要把自己传给 KafkaApis，因为 KafkaApis 会调用各个 manager 的方法来处理请求
         dataPlaneRequestProcessor = new KafkaApis(socketServer.dataPlaneRequestChannel, zkSupport, replicaManager, groupCoordinator, transactionCoordinator,
           autoTopicCreationManager, config.brokerId, config, configRepository, metadataCache, metrics, authorizer, quotaManagers,
           fetchManager, brokerTopicStats, clusterId, time, tokenManager, apiVersionManager)
 
+        // 创建数据平面的 requestHandler 线程池，用于实际处理请求进行业务操作
+        // 它持有了 KafkaApis 实例，并持有了 socket server 的 requestChannel
+        // 会从 requestChannel 中取出网络请求，然后调用 kafkaApis 来执行业务逻辑
         dataPlaneRequestHandlerPool = new KafkaRequestHandlerPool(config.brokerId, socketServer.dataPlaneRequestChannel, dataPlaneRequestProcessor, time,
           config.numIoThreads, s"${SocketServer.DataPlaneMetricPrefix}RequestHandlerAvgIdlePercent", SocketServer.DataPlaneThreadPrefix)
 
@@ -418,6 +463,8 @@ class KafkaServer(
         dynamicConfigManager = new DynamicConfigManager(zkClient, dynamicConfigHandlers)
         dynamicConfigManager.startup()
 
+        // 开启 socketServer 的 acceptor 线程和 processors 线程
+        // 开启之后，socketServer 就能感知到 OP_ACCEPT 事件，然后创建 socketChannel，然后将 socketChannel 注册到 selector 上
         socketServer.startProcessingRequests(authorizerFutures)
 
         _brokerState = BrokerState.RUNNING
@@ -452,9 +499,11 @@ class KafkaServer(
       throw new java.lang.SecurityException(s"${KafkaConfig.ZkEnableSecureAclsProp} is true, but ZooKeeper client TLS configuration identifying at least $KafkaConfig.ZkSslClientEnableProp, $KafkaConfig.ZkClientCnxnSocketProp, and $KafkaConfig.ZkSslKeyStoreLocationProp was not present and the " +
         s"verification of the JAAS login file failed ${JaasUtils.zkSecuritySysConfigString}")
 
+    // 初始化 zkClient
     _zkClient = KafkaZkClient(config.zkConnect, secureAclsEnabled, config.zkSessionTimeoutMs, config.zkConnectionTimeoutMs,
       config.zkMaxInFlightRequests, time, name = "Kafka server", zkClientConfig = zkClientConfig,
       createChrootIfNecessary = true)
+    // 创建 kafka 的根路径
     _zkClient.createTopLevelPaths()
   }
 

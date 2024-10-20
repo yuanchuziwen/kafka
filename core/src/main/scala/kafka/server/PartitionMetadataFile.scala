@@ -107,12 +107,15 @@ class PartitionMetadataFile(val file: File,
 
   def maybeFlush(): Unit = {
     // We check dirtyTopicId first to avoid having to take the lock unnecessarily in the frequently called log append path
+    // 我们首先检查 dirtyTopicId，以避免在频繁调用的日志追加路径中不必要地获取锁
     dirtyTopicIdOpt.foreach { _ =>
       // We synchronize on the actual write to disk
+      // 针对实际写入磁盘的操作进行同步
       lock synchronized {
         dirtyTopicIdOpt.foreach { topicId =>
           try {
             // write to temp file and then swap with the existing file
+            // 将数据写入临时文件，然后与现有文件交换
             val fileOutputStream = new FileOutputStream(tempPath.toFile)
             val writer = new BufferedWriter(new OutputStreamWriter(fileOutputStream, StandardCharsets.UTF_8))
             try {

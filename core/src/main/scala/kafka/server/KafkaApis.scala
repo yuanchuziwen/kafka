@@ -86,6 +86,8 @@ import scala.util.{Failure, Success, Try}
 
 /**
  * Logic to handle the various Kafka requests
+ * <p>
+ *   处理各种 Kafka 请求的逻辑
  */
 class KafkaApis(val requestChannel: RequestChannel,
                 val metadataSupport: MetadataSupport,
@@ -153,6 +155,8 @@ class KafkaApis(val requestChannel: RequestChannel,
 
   /**
    * Top-level method that handles all requests and multiplexes to the right api
+   * <p>
+   *   处理所有请求的顶级方法，并多路复用到正确的 API
    */
   override def handle(request: RequestChannel.Request, requestLocal: RequestLocal): Unit = {
     try {
@@ -162,9 +166,13 @@ class KafkaApis(val requestChannel: RequestChannel,
       if (!apiVersionManager.isApiEnabled(request.header.apiKey)) {
         // The socket server will reject APIs which are not exposed in this scope and close the connection
         // before handing them to the request handler, so this path should not be exercised in practice
+
+        // socket server 将会拒绝在这个范围内没有暴露的 API，并在将它们交给请求处理程序之前关闭连接，
+        // 因此实践中不应该使用这个路径
         throw new IllegalStateException(s"API ${request.header.apiKey} is not enabled")
       }
 
+      // 将不同的 request 分发到不同的处理方法
       request.header.apiKey match {
         case ApiKeys.PRODUCE => handleProduceRequest(request, requestLocal)
         case ApiKeys.FETCH => handleFetchRequest(request)
@@ -532,11 +540,14 @@ class KafkaApis(val requestChannel: RequestChannel,
 
   /**
    * Handle a produce request
+   * <p>
+   *   处理生产请求
    */
   def handleProduceRequest(request: RequestChannel.Request, requestLocal: RequestLocal): Unit = {
     val produceRequest = request.body[ProduceRequest]
     val requestSize = request.sizeInBytes
 
+    // 检查是否有事务记录
     if (RequestUtils.hasTransactionalRecords(produceRequest)) {
       val isAuthorizedTransactional = produceRequest.transactionalId != null &&
         authHelper.authorize(request.context, WRITE, TRANSACTIONAL_ID, produceRequest.transactionalId)
@@ -554,17 +565,28 @@ class KafkaApis(val requestChannel: RequestChannel,
     val authorizedTopics = authHelper.filterByAuthorized(request.context, WRITE, TOPIC,
       produceRequest.data().topicData().asScala)(_.name())
 
+
+    // 做一些校验
+    // 先遍历 topic，然后遍历 partition
     produceRequest.data.topicData.forEach(topic => topic.partitionData.forEach { partition =>
+      // 以下是 partition 维度的处理
       val topicPartition = new TopicPartition(topic.name, partition.index)
       // This caller assumes the type is MemoryRecords and that is true on current serialization
       // We cast the type to avoid causing big change to code base.
       // https://issues.apache.org/jira/browse/KAFKA-10698
+
+      // 以下调用假设 records 类型是 MemoryRecords，并且是被正确序列化的
       val memoryRecords = partition.records.asInstanceOf[MemoryRecords]
-      if (!authorizedTopics.contains(topicPartition.topic))
+
+      // 如果没有权限，那么就返回 TOPIC_AUTHORIZATION_FAILED
+      if (!authorizedTopics.contains(topicPartition.topic)) {
         unauthorizedTopicResponses += topicPartition -> new PartitionResponse(Errors.TOPIC_AUTHORIZATION_FAILED)
-      else if (!metadataCache.contains(topicPartition))
+
+        // 如果 broker 都不知道这个 topic，那么就返回 UNKNOWN_TOPIC_OR_PARTITION
+      } else if (!metadataCache.contains(topicPartition))
         nonExistingTopicResponses += topicPartition -> new PartitionResponse(Errors.UNKNOWN_TOPIC_OR_PARTITION)
-      else
+      else {
+        // 尝试验证 records
         try {
           ProduceRequest.validateRecords(request.header.apiVersion, memoryRecords)
           authorizedRequestInfo += (topicPartition -> memoryRecords)
@@ -572,17 +594,24 @@ class KafkaApis(val requestChannel: RequestChannel,
           case e: ApiException =>
             invalidRequestResponses += topicPartition -> new PartitionResponse(Errors.forException(e))
         }
+      }
     })
 
     // the callback for sending a produce response
     // The construction of ProduceResponse is able to accept auto-generated protocol data so
     // KafkaApis#handleProduceRequest should apply auto-generated protocol to avoid extra conversion.
     // https://issues.apache.org/jira/browse/KAFKA-10730
+
+    // 发送 produce 响应的回调
+    // ProduceResponse 的构造能够接受自动生成的协议数据，
+    // 因此 KafkaApis#handleProduceRequest 应该应用自动生成的协议以避免额外的转换
     @nowarn("cat=deprecation")
     def sendResponseCallback(responseStatus: Map[TopicPartition, PartitionResponse]): Unit = {
+      // 合并 map？
       val mergedResponseStatus = responseStatus ++ unauthorizedTopicResponses ++ nonExistingTopicResponses ++ invalidRequestResponses
       var errorInResponse = false
 
+      // 遍历 mergedResponseStatus，如果有错误，那么就设置 errorInResponse 为 true
       mergedResponseStatus.forKeyValue { (topicPartition, status) =>
         if (status.error != Errors.NONE) {
           errorInResponse = true
@@ -597,6 +626,10 @@ class KafkaApis(val requestChannel: RequestChannel,
       // Record both bandwidth and request quota-specific values and throttle by muting the channel if any of the quotas
       // have been violated. If both quotas have been violated, use the max throttle time between the two quotas. Note
       // that the request quota is not enforced if acks == 0.
+
+      // 记录带宽和请求配额特定的值，并通过静音通道来限制，如果任何一个配额被违反了。
+      // 如果两个配额都被违反了，那么使用两个配额之间的最大节流时间。
+      // 请注意，如果 acks == 0，则不会强制执行请求配额。
       val timeMs = time.milliseconds()
       val bandwidthThrottleTimeMs = quotas.produce.maybeRecordAndGetThrottleTimeMs(request, requestSize, timeMs)
       val requestThrottleTimeMs =
@@ -613,10 +646,14 @@ class KafkaApis(val requestChannel: RequestChannel,
       }
 
       // Send the response immediately. In case of throttling, the channel has already been muted.
+      // 立即发送响应。在节流的情况下，通道已经被静音了。
       if (produceRequest.acks == 0) {
         // no operation needed if producer request.required.acks = 0; however, if there is any error in handling
         // the request, since no response is expected by the producer, the server will close socket server so that
         // the producer client will know that some error has happened and will refresh its metadata
+
+        // 如果 producer request.required.acks = 0，那么不需要操作；但是，如果在处理请求时出现任何错误，
+        // 由于生产者不期望响应，因此服务器将关闭 socket 服务器，以便生产者客户端知道发生了一些错误，并将刷新其元数据
         if (errorInResponse) {
           val exceptionsSummary = mergedResponseStatus.map { case (topicPartition, status) =>
             topicPartition -> status.error.exceptionName
@@ -626,13 +663,17 @@ class KafkaApis(val requestChannel: RequestChannel,
               s"from client id ${request.header.clientId} with ack=0\n" +
               s"Topic and partition to exceptions: $exceptionsSummary"
           )
+          // 如果发生错误，那么就关闭连接
           requestChannel.closeConnection(request, new ProduceResponse(mergedResponseStatus.asJava).errorCounts)
         } else {
           // Note that although request throttling is exempt for acks == 0, the channel may be throttled due to
           // bandwidth quota violation.
+
+          // 请注意，尽管对于 acks == 0，请求节流是免除的，但由于带宽配额违规，通道可能会被节流。
           requestHelper.sendNoOpResponseExemptThrottle(request)
         }
       } else {
+        // 如果 acks != 0，那么就发送响应
         requestChannel.sendResponse(request, new ProduceResponse(mergedResponseStatus.asJava, maxThrottleTimeMs), None)
       }
     }
@@ -643,12 +684,15 @@ class KafkaApis(val requestChannel: RequestChannel,
       }
     }
 
+    // 如果没有通过 authorizedTopics 的验证，那么就直接返回空的 response
     if (authorizedRequestInfo.isEmpty)
       sendResponseCallback(Map.empty)
     else {
+      // 否则，需要通过 replicaManager 来将消息追加到 partition 中
       val internalTopicsAllowed = request.header.clientId == AdminUtils.AdminClientId
 
       // call the replica manager to append messages to the replicas
+      // 调用 replicaManager 将消息追加到副本中
       replicaManager.appendRecords(
         timeout = produceRequest.timeout.toLong,
         requiredAcks = produceRequest.acks,
@@ -661,6 +705,9 @@ class KafkaApis(val requestChannel: RequestChannel,
 
       // if the request is put into the purgatory, it will have a held reference and hence cannot be garbage collected;
       // hence we clear its data here in order to let GC reclaim its memory since it is already appended to log
+
+      // 如果 request 被加入到了 purgatory 中，那么它将有一个持有的引用，因此不能被垃圾回收；
+      // 因此我们在这里清除它的数据，以便让 GC 回收它的内存，因为它已经被追加到了日志中
       produceRequest.clearPartitionRecords()
     }
   }

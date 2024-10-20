@@ -1027,21 +1027,27 @@ class Partition(val topicPartition: TopicPartition,
   def appendRecordsToLeader(records: MemoryRecords, origin: AppendOrigin, requiredAcks: Int,
                             requestLocal: RequestLocal): LogAppendInfo = {
     val (info, leaderHWIncremented) = inReadLock(leaderIsrUpdateLock) {
+      // 尝试获取到该 partition 对应的 leader log；如果取到了才会执行后续操作
       leaderLogIfLocal match {
         case Some(leaderLog) =>
+          // 获取配置中允许的最小 ISR 数量
           val minIsr = leaderLog.config.minInSyncReplicas
+          // 确定当前该 partition 的 ISR 集合大小
           val inSyncSize = isrState.isr.size
 
           // Avoid writing to leader if there are not enough insync replicas to make it safe
+          // 如果当前 ISR 集合大小小于配置中的最小 ISR 数量，且 requiredAcks 为 -1，则抛出异常
           if (inSyncSize < minIsr && requiredAcks == -1) {
             throw new NotEnoughReplicasException(s"The size of the current ISR ${isrState.isr} " +
               s"is insufficient to satisfy the min.isr requirement of $minIsr for partition $topicPartition")
           }
 
+          // 将消息记录到 leader replica 的 log 中
           val info = leaderLog.appendAsLeader(records, leaderEpoch = this.leaderEpoch, origin,
             interBrokerProtocolVersion, requestLocal)
 
           // we may need to increment high watermark since ISR could be down to 1
+          // 我们可能需要增加高水位线，因为 ISR 可能会减少到 1
           (info, maybeIncrementLeaderHW(leaderLog))
 
         case None =>
