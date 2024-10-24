@@ -49,6 +49,8 @@ case class ProduceMetadata(produceRequiredAcks: Short,
 /**
  * A delayed produce operation that can be created by the replica manager and watched
  * in the produce operation purgatory
+ * <p>
+ *   由 replica manager 创建并在 produce operation purgatory 中监视的延迟 produce 操作
  */
 class DelayedProduce(delayMs: Long,
                      produceMetadata: ProduceMetadata,
@@ -83,16 +85,19 @@ class DelayedProduce(delayMs: Long,
    */
   override def tryComplete(): Boolean = {
     // check for each partition if it still has pending acks
+    // 验证每个分区是否存在 pending 的 acks
     produceMetadata.produceStatus.forKeyValue { (topicPartition, status) =>
       trace(s"Checking produce satisfaction for $topicPartition, current status $status")
       // skip those partitions that have already been satisfied
       if (status.acksPending) {
+        // 尝试从 replicaManager 中获取 partition
         val (hasEnough, error) = replicaManager.getPartitionOrError(topicPartition) match {
           case Left(err) =>
             // Case A
             (false, err)
 
           case Right(partition) =>
+            // 验证是否有足够的副本已经达到了 requiredOffset
             partition.checkEnoughReplicasReachOffset(status.requiredOffset)
         }
 

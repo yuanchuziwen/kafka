@@ -16,12 +16,6 @@
  */
 package kafka.server
 
-import java.io.File
-import java.util.Optional
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.locks.Lock
-
 import com.yammer.metrics.core.Meter
 import kafka.api._
 import kafka.cluster.{BrokerEndPoint, Partition}
@@ -29,24 +23,22 @@ import kafka.common.RecordValidationException
 import kafka.controller.{KafkaController, StateChangeLogger}
 import kafka.log._
 import kafka.metrics.KafkaMetricsGroup
-import kafka.server.{FetchMetadata => SFetchMetadata}
 import kafka.server.HostedPartition.Online
 import kafka.server.QuotaFactory.QuotaManagers
 import kafka.server.checkpoints.{LazyOffsetCheckpoints, OffsetCheckpointFile, OffsetCheckpoints}
-import kafka.utils._
+import kafka.server.{FetchMetadata => SFetchMetadata}
 import kafka.utils.Implicits._
+import kafka.utils._
 import kafka.zk.KafkaZkClient
-import org.apache.kafka.common.{ElectionType, IsolationLevel, Node, TopicPartition, Uuid}
 import org.apache.kafka.common.errors._
 import org.apache.kafka.common.internals.Topic
-import org.apache.kafka.common.message.LeaderAndIsrRequestData.LeaderAndIsrPartitionState
 import org.apache.kafka.common.message.DeleteRecordsResponseData.DeleteRecordsPartitionResult
-import org.apache.kafka.common.message.{DescribeLogDirsResponseData, DescribeProducersResponseData, FetchResponseData, LeaderAndIsrResponseData}
-import org.apache.kafka.common.message.LeaderAndIsrResponseData.LeaderAndIsrTopicError
-import org.apache.kafka.common.message.LeaderAndIsrResponseData.LeaderAndIsrPartitionError
+import org.apache.kafka.common.message.LeaderAndIsrRequestData.LeaderAndIsrPartitionState
+import org.apache.kafka.common.message.LeaderAndIsrResponseData.{LeaderAndIsrPartitionError, LeaderAndIsrTopicError}
 import org.apache.kafka.common.message.OffsetForLeaderEpochRequestData.OffsetForLeaderTopic
 import org.apache.kafka.common.message.OffsetForLeaderEpochResponseData.{EpochEndOffset, OffsetForLeaderTopicResult}
 import org.apache.kafka.common.message.StopReplicaRequestData.StopReplicaPartitionState
+import org.apache.kafka.common.message.{DescribeLogDirsResponseData, DescribeProducersResponseData, FetchResponseData, LeaderAndIsrResponseData}
 import org.apache.kafka.common.metrics.Metrics
 import org.apache.kafka.common.network.ListenerName
 import org.apache.kafka.common.protocol.Errors
@@ -54,16 +46,22 @@ import org.apache.kafka.common.record.FileRecords.TimestampAndOffset
 import org.apache.kafka.common.record._
 import org.apache.kafka.common.replica.PartitionView.DefaultPartitionView
 import org.apache.kafka.common.replica.ReplicaView.DefaultReplicaView
-import org.apache.kafka.common.replica.{ClientMetadata, _}
+import org.apache.kafka.common.replica._
 import org.apache.kafka.common.requests.FetchRequest.PartitionData
 import org.apache.kafka.common.requests.ProduceResponse.PartitionResponse
 import org.apache.kafka.common.requests._
 import org.apache.kafka.common.utils.Time
+import org.apache.kafka.common._
 import org.apache.kafka.image.{LocalReplicaChanges, MetadataImage, TopicsDelta}
 
-import scala.jdk.CollectionConverters._
+import java.io.File
+import java.util.Optional
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.locks.Lock
 import scala.collection.{Map, Seq, Set, mutable}
 import scala.compat.java8.OptionConverters._
+import scala.jdk.CollectionConverters._
 
 /*
  * Result metadata of a log append operation on the log
@@ -646,6 +644,7 @@ class ReplicaManager(val config: KafkaConfig,
         () =>
           localProduceResults.foreach {
             case (topicPartition, result) =>
+              // 基于 topicPartition 封装一个 requestKey 对象，作为延时操作的 key
               val requestKey = TopicPartitionOperationKey(topicPartition)
               result.info.leaderHwChange match {
                 case LeaderHwChange.Increased =>
@@ -656,6 +655,7 @@ class ReplicaManager(val config: KafkaConfig,
                   delayedDeleteRecordsPurgatory.checkAndComplete(requestKey)
                 case LeaderHwChange.Same =>
                   // probably unblock some follower fetch requests since log end offset has been updated
+                  // 可能解除一些 follower fetch 请求的阻塞，因为日志结束偏移量已更新
                   delayedFetchPurgatory.checkAndComplete(requestKey)
                 case LeaderHwChange.None =>
                   // nothing
@@ -665,10 +665,11 @@ class ReplicaManager(val config: KafkaConfig,
 
       recordConversionStatsCallback(localProduceResults.map { case (k, v) => k -> v.info.recordConversionStats })
 
+      // 判断是否需要延时 produce 请求
       if (delayedProduceRequestRequired(requiredAcks, entriesPerPartition, localProduceResults)) {
         // create delayed produce operation
         val produceMetadata = ProduceMetadata(requiredAcks, produceStatus)
-        // 构造一个延时 produce 的任务
+        // 构造一个延时 produce 的任务；会将 callback 放到 produceOperation 中，当触发 onComplete 时，会调用 callback
         val delayedProduce = new DelayedProduce(timeout, produceMetadata, this, responseCallback, delayedProduceLock)
 
         // create a list of (topic, partition) pairs to use as keys for this delayed produce operation
@@ -677,16 +678,21 @@ class ReplicaManager(val config: KafkaConfig,
         // try to complete the request immediately, otherwise put it into the purgatory
         // this is because while the delayed produce operation is being created, new
         // requests may arrive and hence make this operation completable.
+
+        // 尝试立即完成请求，否则将其放入 purgatory，因为在创建延迟 produce 操作时，可能会到达新的请求，从而使此操作可完成。
         delayedProducePurgatory.tryCompleteElseWatch(delayedProduce, producerRequestKeys)
 
       } else {
         // we can respond immediately
         val produceResponseStatus = produceStatus.map { case (k, status) => k -> status.responseStatus }
+        // 直接触发 callback 的执行
         responseCallback(produceResponseStatus)
       }
     } else {
       // If required.acks is outside accepted range, something is wrong with the client
       // Just return an error and don't handle the request at all
+
+      // 如果 required.acks 超出接受范围，则客户端存在问题，只需返回错误，不处理请求
       val responseStatus = entriesPerPartition.map { case (topicPartition, _) =>
         topicPartition -> new PartitionResponse(
           Errors.INVALID_REQUIRED_ACKS,
@@ -1039,6 +1045,10 @@ class ReplicaManager(val config: KafkaConfig,
    * Fetch messages from a replica, and wait until enough data can be fetched and return;
    * the callback function will be triggered either when timeout or required fetch info is satisfied.
    * Consumers may fetch from any replica, but followers can only fetch from the leader.
+   * <p>
+   * 从 replica 中获取消息，并等待直到可以获取足够的数据并返回；
+   * 当超时或满足所需的 fetch 信息时，将触发回调函数。
+   * 消费者可以从任何 replica 获取，但 follower 只能从 leader 获取。
    */
   def fetchMessages(timeout: Long,
                     replicaId: Int,
@@ -1050,8 +1060,10 @@ class ReplicaManager(val config: KafkaConfig,
                     responseCallback: Seq[(TopicPartition, FetchPartitionData)] => Unit,
                     isolationLevel: IsolationLevel,
                     clientMetadata: Option[ClientMetadata]): Unit = {
+    // 确定 fetchRequest 的来源
     val isFromFollower = Request.isValidBrokerId(replicaId)
     val isFromConsumer = !(isFromFollower || replicaId == Request.FutureLocalReplicaId)
+    // 确定隔离级别，即确定最多可以拉取到哪个位置
     val fetchIsolation = if (!isFromConsumer)
       FetchLogEnd
     else if (isolationLevel == IsolationLevel.READ_COMMITTED)
@@ -1060,7 +1072,11 @@ class ReplicaManager(val config: KafkaConfig,
       FetchHighWatermark
 
     // Restrict fetching to leader if request is from follower or from a client with older version (no ClientMetadata)
+
+    // 如果请求来自 follower 或来自没有 ClientMetadata 的客户端，则限制拉取到 leader
     val fetchOnlyFromLeader = isFromFollower || (isFromConsumer && clientMetadata.isEmpty)
+
+    // 定义一个局部方法，用于读取日志
     def readFromLog(): Seq[(TopicPartition, LogReadResult)] = {
       val result = readFromLocalLog(
         replicaId = replicaId,
@@ -1071,10 +1087,12 @@ class ReplicaManager(val config: KafkaConfig,
         readPartitionInfo = fetchInfos,
         quota = quota,
         clientMetadata = clientMetadata)
+      // 如果是从 follower 来的，更新 follower 的 fetch 状态
       if (isFromFollower) updateFollowerFetchState(replicaId, result)
       else result
     }
 
+    // 尝试从 local log 中读取数据
     val logReadResults = readFromLog()
 
     // check if this fetch request can be satisfied right away
@@ -1131,6 +1149,8 @@ class ReplicaManager(val config: KafkaConfig,
 
   /**
    * Read from multiple topic partitions at the given offset up to maxSize bytes
+   * <p>
+   * 从给定偏移量的多个 topic partitions 中读取，最多读取 maxSize 字节
    */
   def readFromLocalLog(replicaId: Int,
                        fetchOnlyFromLeader: Boolean,
@@ -1142,6 +1162,7 @@ class ReplicaManager(val config: KafkaConfig,
                        clientMetadata: Option[ClientMetadata]): Seq[(TopicPartition, LogReadResult)] = {
     val traceEnabled = isTraceEnabled
 
+    // 定义一个局部方法，用于读取日志
     def read(tp: TopicPartition, fetchInfo: PartitionData, limitBytes: Int, minOneMessage: Boolean): LogReadResult = {
       val offset = fetchInfo.fetchOffset
       val partitionFetchSize = fetchInfo.maxBytes
@@ -1158,15 +1179,18 @@ class ReplicaManager(val config: KafkaConfig,
         val fetchTimeMs = time.milliseconds
 
         // If we are the leader, determine the preferred read-replica
+        // 如果我们是 leader，则确定首选读取副本
         val preferredReadReplica = clientMetadata.flatMap(
           metadata => findPreferredReadReplica(partition, metadata, replicaId, fetchInfo.fetchOffset, fetchTimeMs))
 
+        // 如果设置了 preferredReadReplica，则跳过读取
         if (preferredReadReplica.isDefined) {
           replicaSelectorOpt.foreach { selector =>
             debug(s"Replica selector ${selector.getClass.getSimpleName} returned preferred replica " +
               s"${preferredReadReplica.get} for $clientMetadata")
           }
           // If a preferred read-replica is set, skip the read
+          // 如果指定了首选读取副本，则跳过读取
           val offsetSnapshot = partition.fetchOffsetSnapshot(fetchInfo.currentLeaderEpoch, fetchOnlyFromLeader = false)
           LogReadResult(info = FetchDataInfo(LogOffsetMetadata.UnknownOffsetMetadata, MemoryRecords.EMPTY),
             divergingEpoch = None,
@@ -1180,6 +1204,7 @@ class ReplicaManager(val config: KafkaConfig,
             exception = None)
         } else {
           // Try the read first, this tells us whether we need all of adjustedFetchSize for this partition
+          // 首先尝试读取，这告诉我们是否需要为此 partition 的所有 adjustedFetchSize
           val readInfo: LogReadInfo = partition.readRecords(
             lastFetchedEpoch = fetchInfo.lastFetchedEpoch,
             fetchOffset = fetchInfo.fetchOffset,
@@ -1251,15 +1276,19 @@ class ReplicaManager(val config: KafkaConfig,
     }
 
     var limitBytes = fetchMaxBytes
+    // 声明一个可变数组，用于存储读取结果
     val result = new mutable.ArrayBuffer[(TopicPartition, LogReadResult)]
     var minOneMessage = !hardMaxBytesLimit
     readPartitionInfo.foreach { case (tp, fetchInfo) =>
+      // 进行实际的 io 读取
       val readResult = read(tp, fetchInfo, limitBytes, minOneMessage)
       val recordBatchSize = readResult.info.records.sizeInBytes
       // Once we read from a non-empty partition, we stop ignoring request and partition level size limits
+      // 一旦我们从一个非空的 partition 读取数据，我们就停止忽略请求和 partition 级别的大小限制
       if (recordBatchSize > 0)
         minOneMessage = false
       limitBytes = math.max(0, limitBytes - recordBatchSize)
+      // 将读取的结果添加到 result 中
       result += (tp -> readResult)
     }
     result
@@ -1269,6 +1298,9 @@ class ReplicaManager(val config: KafkaConfig,
     * Using the configured [[ReplicaSelector]], determine the preferred read replica for a partition given the
     * client metadata, the requested offset, and the current set of replicas. If the preferred read replica is the
     * leader, return None
+    * <p>
+    * 使用配置的 [[ReplicaSelector]]，根据客户端元数据、请求的偏移量和当前的副本集，确定 partition 的首选读取副本。
+    * 如果首选读取副本是 leader，则返回 None
     */
   def findPreferredReadReplica(partition: Partition,
                                clientMetadata: ClientMetadata,
@@ -1819,6 +1851,13 @@ class ReplicaManager(val config: KafkaConfig,
    * start offset further than the last offset in the fetched records. The followers will get the
    * updated leader's state in the next fetch response. If follower has a diverging epoch or if read
    * fails with any error, follower fetch state is not updated.
+   * <p>
+   * 更新基于最后一次获取请求的 follower 的 fetch state，并更新`readResult`。
+   * 如果 follower replica 未被识别为分配的副本之一，则不更新`readResult`，以便 log start/end offset 和 high watermark 与 fetch response 中的记录保持一致。
+   * log start/end offset 和 high watermark 可能不仅由于此获取请求而发生变化，
+   * 例如，滚动新日志段和删除旧日志段可能会将日志的起始偏移量移动到比获取记录中的最后偏移量更远的位置。
+   * follower 将在下一个获取响应中获得更新的 leader 状态。
+   * 如果 follower 具有 diverging epoch 或者读取失败，则不更新 follower fetch state。
    */
   private def updateFollowerFetchState(followerId: Int,
                                        readResults: Seq[(TopicPartition, LogReadResult)]): Seq[(TopicPartition, LogReadResult)] = {

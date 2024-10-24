@@ -86,10 +86,10 @@ abstract class DelayedOperation(override val delayMs: Long,
    * 如果调用者完成操作，则返回 true：请注意，并发线程可以尝试完成相同的操作，但只有第一个线程将成功完成操作并返回 true，其他线程仍将返回 false
    */
   def forceComplete(): Boolean = {
-    // cas 更新 completed 为 true
+    // cas 更新 completed 为 true；能保证并发线程的安全
     if (completed.compareAndSet(false, true)) {
       // cancel the timeout timer
-      // 取消超时计时器
+      // 将任务从时间轮中移除
       cancel()
       // 执行 onComplete() 方法
       onComplete()
@@ -161,6 +161,7 @@ abstract class DelayedOperation(override val delayMs: Long,
    * run() method defines a task that is executed on timeout
    */
   override def run(): Unit = {
+    // 任务到期后，会给提交给线程池执行；进而调用 forceComplete() 方法
     if (forceComplete())
       onExpiration()
   }
@@ -175,6 +176,7 @@ object DelayedOperationPurgatory {
                                    purgeInterval: Int = 1000,
                                    reaperEnabled: Boolean = true,
                                    timerEnabled: Boolean = true): DelayedOperationPurgatory[T] = {
+    // 一个时间轮
     val timer = new SystemTimer(purgatoryName)
     new DelayedOperationPurgatory[T](purgatoryName, timer, brokerId, purgeInterval, reaperEnabled, timerEnabled)
   }
@@ -187,7 +189,7 @@ object DelayedOperationPurgatory {
  *   一个用于统一处理延时操作的 helper 类，用于记录具有超时的延迟操作，并使超时的操作过期。
  */
 final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: String,
-                                                             timeoutTimer: Timer,
+                                                             timeoutTimer: Timer, // systemTimer
                                                              brokerId: Int = 0,
                                                              purgeInterval: Int = 1000,
                                                              reaperEnabled: Boolean = true,
@@ -195,6 +197,7 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
         extends Logging with KafkaMetricsGroup {
   /* a list of operation watching keys */
   private class WatcherList {
+    // key2watchers，将 operation 划分为了不同等待的 key
     val watchersByKey = new Pool[Any, Watchers](Some((key: Any) => new Watchers(key)))
 
     val watchersLock = new ReentrantLock()
@@ -209,16 +212,23 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
   }
 
   // 声明一个 WatcherList 数组，长度为 Shards
+  // 一个 watcherList 对应一个 poll，即对应一个 ConcurrentHashMap<Key, Watchers>
+  /*
+  数据结构：watcherLists -> List<WatcherList> -> List<Map<Key, Watchers>> -> List< Map<Key, List<Operation>> >
+  之所以抽象出 watcherLists 可能是为了降低并发？但为啥不再加一层 ConcurrentHashMap？
+  */
   private val watcherLists = Array.fill[WatcherList](DelayedOperationPurgatory.Shards)(new WatcherList)
+  // 根据 key 的 hashcode 来选择一个数组的 bucket；
   private def watcherList(key: Any): WatcherList = {
     watcherLists(Math.abs(key.hashCode() % watcherLists.length))
   }
 
   // the number of estimated total operations in the purgatory
-  // 估计在 purgatory 中的总操作数
+  // 估计在 purgatory 中的 DelayedOperation 的总数
   private[this] val estimatedTotalOperations = new AtomicInteger(0)
 
   /* background thread expiring operations that have timed out */
+  // 后台线程，用于推进时间轮表针，以及定期清理 watcherLists 中已经完成的 DelayedOperation
   private val expirationReaper = new ExpiredOperationReaper()
 
   private val metricsTags = Map("delayedOperation" -> purgatoryName)
@@ -345,11 +355,16 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
   /*
    * Return the watch list of the given key, note that we need to
    * grab the removeWatchersLock to avoid the operation being added to a removed watcher list
+   * <p>
+   * 返回给定 key 的 watch list，
+   * 注意我们需要获取 removeWatchersLock 以避免操作被添加到已删除的 watcher list 中
    */
   private def watchForOperation(key: Any, operation: T): Unit = {
     val wl = watcherList(key)
     inLock(wl.watchersLock) {
+      // 基于这个 key 获取或创建对应的 list
       val watcher = wl.watchersByKey.getAndMaybePut(key)
+      // 将 operation 添加到 watcher 中
       watcher.watch(operation)
     }
   }
@@ -358,9 +373,11 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
    * Remove the key from watcher lists if its list is empty
    */
   private def removeKeyIfEmpty(key: Any, watchers: Watchers): Unit = {
+    // 获取到对应的 WatcherList
     val wl = watcherList(key)
     inLock(wl.watchersLock) {
       // if the current key is no longer correlated to the watchers to remove, skip
+      // 如果当前 key 已经不再关联要移除的 watchers，则跳过
       if (wl.watchersByKey.get(key) != watchers)
         return
 
@@ -387,7 +404,7 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
    *   基于某个键的已观察延迟操作的链表
    */
   private class Watchers(val key: Any) {
-    // 被观察的队列
+    // delayOperation 的集合
     private[this] val operations = new ConcurrentLinkedQueue[T]()
 
     // count the current number of watched operations. This is O(n), so use isEmpty() if possible
@@ -461,6 +478,7 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
   }
 
   def advanceClock(timeoutMs: Long): Unit = {
+    // 将时间轮向前推进 timeoutMs
     timeoutTimer.advanceClock(timeoutMs)
 
     // Trigger a purge if the number of completed but still being watched operations is larger than

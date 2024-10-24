@@ -1295,6 +1295,7 @@ class Log(@volatile private var _dir: File, // log 对应的磁盘目录，此�
       trace(s"Reading maximum $maxLength bytes at offset $startOffset from log with " +
         s"total length $size bytes")
 
+      // 判断是否需要包含已中止的事务,只有在 FetchTxnCommitted 隔离级别下才需要
       val includeAbortedTxns = isolation == FetchTxnCommitted
 
       // Because we don't use the lock for reading, the synchronization is a little bit tricky.
@@ -1304,21 +1305,33 @@ class Log(@volatile private var _dir: File, // log 对应的磁盘目录，此�
       // 我们创建本地变量以避免与 log 的更新发生竞争条件
       val endOffsetMetadata = nextOffsetMetadata
       val endOffset = endOffsetMetadata.messageOffset
+      
+      // 获取起始偏移量所在的日志段
       var segmentOpt = segments.floorSegment(startOffset)
 
-      // return error on attempt to read beyond the log end offset or read below log start offset
+      // 检查读取请求的有效性:
+      // 1. 起始偏移量不能超过日志结束位置
+      // 2. 必须能找到对应的日志段
+      // 3. 起始偏移量不能小于日志起始位置
+      // 否则抛出 OffsetOutOfRangeException 异常
       if (startOffset > endOffset || segmentOpt.isEmpty || startOffset < logStartOffset)
         throw new OffsetOutOfRangeException(s"Received request for offset $startOffset for partition $topicPartition, " +
           s"but we only have log segments in the range $logStartOffset to $endOffset.")
 
+      // 根据不同的隔离级别确定最大可读取的位置:
+      // - FetchLogEnd: 使用日志结束位置
+      // - FetchHighWatermark: 使用高水位标记
+      // - FetchTxnCommitted: 使用最后稳定位置
       val maxOffsetMetadata = isolation match {
         case FetchLogEnd => endOffsetMetadata
         case FetchHighWatermark => fetchHighWatermarkMetadata
         case FetchTxnCommitted => fetchLastStableOffsetMetadata
       }
 
+      // 如果起始位置等于最大可读取位置,返回空结果
       if (startOffset == maxOffsetMetadata.messageOffset)
         emptyFetchDataInfo(maxOffsetMetadata, includeAbortedTxns)
+      // 如果起始位置超过最大可读取位置,返回空结果
       else if (startOffset > maxOffsetMetadata.messageOffset)
         emptyFetchDataInfo(convertToOffsetMetadataOrThrow(startOffset), includeAbortedTxns)
       else {
@@ -1330,28 +1343,34 @@ class Log(@volatile private var _dir: File, // log 对应的磁盘目录，此�
         // 但是如果该 segment 不包含任何 offset 大于该 offset 的消息，
         // 则继续从连续的 segment 中读取，直到我们获得一些消息或达到 log 的末尾
         var fetchDataInfo: FetchDataInfo = null
+        // 循环读取日志段,直到找到数据或到达日志末尾
         while (fetchDataInfo == null && segmentOpt.isDefined) {
           val segment = segmentOpt.get
           val baseOffset = segment.baseOffset
 
+          // 确定在当前日志段中的最大读取位置
           val maxPosition =
             // Use the max offset position if it is on this segment; otherwise, the segment size is the limit.
             if (maxOffsetMetadata.segmentBaseOffset == segment.baseOffset) maxOffsetMetadata.relativePositionInSegment
             else segment.size
 
+          // 从日志段中读取数据
           fetchDataInfo = segment.read(startOffset, maxLength, maxPosition, minOneMessage)
+          
+          // 如果读取到数据且需要包含已中止事务,则添加事务信息
           if (fetchDataInfo != null) {
             if (includeAbortedTxns)
               fetchDataInfo = addAbortedTransactions(startOffset, segment, fetchDataInfo)
           } else segmentOpt = segments.higherSegment(baseOffset)
         }
 
+        // 返回读取结果,如果没有读到数据则返回空结果
         if (fetchDataInfo != null) fetchDataInfo
         else {
           // okay we are beyond the end of the last segment with no data fetched although the start offset is in range,
           // this can happen when all messages with offset larger than start offsets have been deleted.
-
           // In this case, we will return the empty set with log end offset metadata
+          
           // 好吧，我们超出了最后一个 segment 的末尾，没有获取任何数据，尽管起始 offset 在范围内，
           // 当所有 offset 大于起始 offset 的消息都被删除时，就会发生这种情况。
           FetchDataInfo(nextOffsetMetadata, MemoryRecords.EMPTY)

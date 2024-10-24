@@ -84,15 +84,19 @@ class DelayedFetch(delayMs: Long,
    */
   override def tryComplete(): Boolean = {
     var accumulatedSize = 0
+    // 遍历 fetchMetadata 中的所有 partition 的状态
     fetchMetadata.fetchPartitionStatus.foreach {
       case (topicPartition, fetchStatus) =>
+        // 获取前面读取 log 时的结束位置
         val fetchOffset = fetchStatus.startOffsetMetadata
         val fetchLeaderEpoch = fetchStatus.fetchInfo.currentLeaderEpoch
         try {
           if (fetchOffset != LogOffsetMetadata.UnknownOffsetMetadata) {
+            // 查找分区的 leader 副本，入股哦找不到就抛异常
             val partition = replicaManager.getPartitionOrException(topicPartition)
             val offsetSnapshot = partition.fetchOffsetSnapshot(fetchLeaderEpoch, fetchMetadata.fetchOnlyLeader)
 
+            // 根据 fetchIsolation 的不同，获取不同的结束位置
             val endOffset = fetchMetadata.fetchIsolation match {
               case FetchLogEnd => offsetSnapshot.logEndOffset
               case FetchHighWatermark => offsetSnapshot.highWatermark
@@ -102,14 +106,21 @@ class DelayedFetch(delayMs: Long,
             // Go directly to the check for Case G if the message offsets are the same. If the log segment
             // has just rolled, then the high watermark offset will remain the same but be on the old segment,
             // which would incorrectly be seen as an instance of Case F.
+
+            // 检查上次读取后 endOffset 是否发生了变化，如果没改变，之前读不到足够的数据，现在还是读不到足够的数据
             if (endOffset.messageOffset != fetchOffset.messageOffset) {
               if (endOffset.onOlderSegment(fetchOffset)) {
                 // Case F, this can happen when the new fetch operation is on a truncated leader
+
+                // 此时，endOffset 出现了减小的情况，跑到 baseOffset 较小的 segment 上了
+                // 可能是 leader 副本的 log 出现了 truncate 操作
                 debug(s"Satisfying fetch $fetchMetadata since it is fetching later segments of partition $topicPartition.")
                 return forceComplete()
               } else if (fetchOffset.onOlderSegment(endOffset)) {
                 // Case F, this can happen when the fetch operation is falling behind the current segment
                 // or the partition has just rolled a new segment
+
+                // 此时 fetchOffset 虽然落在了 endOffset 之前，但是产生了新的 active segment，导致 fetchOffset 落在了旧的 segment 上
                 debug(s"Satisfying fetch $fetchMetadata immediately since it is fetching older segments.")
                 // We will not force complete the fetch request if a replica should be throttled.
                 if (!replicaManager.shouldLeaderThrottle(quota, partition, fetchMetadata.replicaId))
@@ -123,6 +134,7 @@ class DelayedFetch(delayMs: Long,
             }
 
             // Case H: If truncation has caused diverging epoch while this request was in purgatory, return to trigger truncation
+            // 如果 fetchMetadata 中的 fetchInfo 中包含了 lastFetchedEpoch，那么需要检查是否有 diverging epoch
             fetchStatus.fetchInfo.lastFetchedEpoch.ifPresent { fetchEpoch =>
               val epochEndOffset = partition.lastOffsetForLeaderEpoch(fetchLeaderEpoch, fetchEpoch, fetchOnlyFromLeader = false)
               if (epochEndOffset.errorCode != Errors.NONE.code()
@@ -172,6 +184,7 @@ class DelayedFetch(delayMs: Long,
    * Upon completion, read whatever data is available and pass to the complete callback
    */
   override def onComplete(): Unit = {
+    // 读取数据
     val logReadResults = replicaManager.readFromLocalLog(
       replicaId = fetchMetadata.replicaId,
       fetchOnlyFromLeader = fetchMetadata.fetchOnlyLeader,
@@ -182,6 +195,7 @@ class DelayedFetch(delayMs: Long,
       clientMetadata = clientMetadata,
       quota = quota)
 
+    // 逐个 partition 来封装
     val fetchPartitionData = logReadResults.map { case (tp, result) =>
       val isReassignmentFetch = fetchMetadata.isFromFollower &&
         replicaManager.isAddingReplica(tp, fetchMetadata.replicaId)
@@ -189,6 +203,7 @@ class DelayedFetch(delayMs: Long,
       tp -> result.toFetchPartitionData(isReassignmentFetch)
     }
 
+    // 触发回调
     responseCallback(fetchPartitionData)
   }
 }
