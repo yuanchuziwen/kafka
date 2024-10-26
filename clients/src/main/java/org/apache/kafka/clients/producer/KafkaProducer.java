@@ -707,7 +707,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                                                          LogContext logContext) {
         TransactionManager transactionManager = null;
 
-        // 检查是否启用了幂等性配置
+        // 只要开启了幂等性，就需要 TransactionManager
         if (config.getBoolean(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG)) {
             // 获取事务 ID
             final String transactionalId = config.getString(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
@@ -1233,6 +1233,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         try {
             // 验证生产者是否已关闭
             throwIfProducerClosed();
+
             // first make sure the metadata for the topic is available
             // 确保主题的元数据可用
             long nowMs = time.milliseconds();
@@ -1405,13 +1406,14 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         if (cluster.invalidTopics().contains(topic))
             throw new InvalidTopicException(topic);
 
-        // 将 topic 添加到元数据中，并更新当前时间
+        // 将 topic 添加到元数据中，并更新其超时时间
         metadata.add(topic, nowMs);
 
         // 获取 topic 的分区数
         Integer partitionsCount = cluster.partitionCountForTopic(topic);
         // Return cached metadata if we have it, and if the record's partition is either undefined
         // or within the known partition range
+
         // 如果我们有缓存的元数据，并且记录的分区未定义或在已知分区范围内，则返回缓存的元数据
         if (partitionsCount != null && (partition == null || partition < partitionsCount))
             return new ClusterAndWaitTime(cluster, 0);
@@ -1423,6 +1425,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         // Issue metadata requests until we have metadata for the topic and the requested partition,
         // or until maxWaitTimeMs is exceeded. This is necessary in case the metadata
         // is stale and the number of partitions for this topic has increased in the meantime.
+
         // 发出元数据请求，直到我们有主题和请求分区的元数据，或者超过 maxWaitTimeMs。
         // 这是必要的，以防元数据过时，并且此期间主题的分区数增加。
         do {
@@ -1431,12 +1434,13 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             } else {
                 log.trace("Requesting metadata update for topic {}.", topic);
             }
-            // 再更新一次元数据
+            // 再更新一次 metadata 中维护的该 topic 的超时时间
             metadata.add(topic, nowMs + elapsed);
             int version = metadata.requestUpdateForTopic(topic);
+            // 底层唤醒 networkClient 的 selector
             sender.wakeup();
-            // 等待元数据更新，看起来更新是在 sender 中操作的
             try {
+                // 交给 io 线程来更新元数据，业务线程只能等待
                 metadata.awaitUpdate(version, remainingWaitMs);
             } catch (TimeoutException ex) {
                 // Rethrow with original maxWaitMs to prevent logging exception with remainingWaitMs
@@ -1445,7 +1449,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                         String.format("Topic %s not present in metadata after %d ms.",
                                 topic, maxWaitMs));
             }
-            // 再次获取集群元数据
+            // 再次获取集群元数据，并获取最新的该 topic 的分区数
             cluster = metadata.fetch();
             elapsed = time.milliseconds() - nowMs;
             if (elapsed >= maxWaitMs) {

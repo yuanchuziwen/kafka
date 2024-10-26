@@ -359,7 +359,6 @@ public class MemoryRecordsBuilder implements AutoCloseable {
      * 释放用于记录追加的资源（例如压缩缓冲区）。一旦调用此方法，只能更新 RecordBatch 头部。
      */
     public void closeForRecordAppends() {
-
         if (appendStream != CLOSED_STREAM) {
             try {
                 // 关闭数据输出流

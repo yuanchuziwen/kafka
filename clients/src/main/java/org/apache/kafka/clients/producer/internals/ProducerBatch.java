@@ -127,14 +127,17 @@ public final class ProducerBatch {
      * 如果没有足够的空间，则返回 null
      */
     public FutureRecordMetadata tryAppend(long timestamp, byte[] key, byte[] value, Header[] headers, Callback callback, long now) {
-        // 交给 MemoryRecordsBuilder 来处理
+        // 如果当前 batch 没有足够的空间，则返回 null
         if (!recordsBuilder.hasRoomFor(timestamp, key, value, headers)) {
             return null;
         } else {
+            // 交给 MemoryRecordsBuilder 来处理
             this.recordsBuilder.append(timestamp, key, value, headers);
+            // 更新一些成员变量，记录当前的 batch 情况
             this.maxRecordSize = Math.max(this.maxRecordSize, AbstractRecords.estimateSizeInBytesUpperBound(magic(),
                     recordsBuilder.compressionType(), key, value, headers));
             this.lastAppendTime = now;
+
             // 这个 FutureRecordMetadata 实现了 Future 接口，内部的 get 方法会触发针对 this.produceFuture 的阻塞
             // this.produceFuture 是 batch 维度的，内部是一个 CountDownLatch，只有当 batch 完成时才会 countDown
             FutureRecordMetadata future = new FutureRecordMetadata(this.produceFuture, this.recordCount,
@@ -144,6 +147,7 @@ public final class ProducerBatch {
                     Time.SYSTEM);
             // we have to keep every future returned to the users in case the batch needs to be
             // split to several new batches and resent.
+
             // 将回调函数和 FutureRecordMetadata 对象封装成 Thunk 对象，添加到 thunks 列表中
             thunks.add(new Thunk(callback, future));
             this.recordCount++;

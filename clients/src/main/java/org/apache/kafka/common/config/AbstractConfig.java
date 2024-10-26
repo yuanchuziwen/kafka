@@ -136,18 +136,18 @@ public class AbstractConfig {
      */
     @SuppressWarnings("unchecked")
     public AbstractConfig(ConfigDef definition, Map<?, ?> originals,  Map<String, ?> configProviderProps, boolean doLog) {
-        // 检查所有的键是否都是字符串
+        // step1 - 检查所有配置的 key 都是字符串
         for (Map.Entry<?, ?> entry : originals.entrySet())
             if (!(entry.getKey() instanceof String))
                 throw new ConfigException(entry.getKey().toString(), entry.getValue(), "Key must be a string.");
 
-        // 解析配置变量
-        // 内部会返回一个 ResolvingMap，包含 resolvedOriginals 和 originals
-        // 实际使用的时候都会使用 resolvedOriginals
+        // step 2 - 解析 originals 配置变量
+        // 内部会返回一个 ResolvingMap，包含 resolvedOriginals 和 originals；实际使用的时候都会使用 resolvedOriginals
         this.originals = resolveConfigVariables(configProviderProps, (Map<String, Object>) originals);
         // 根据转入的 ConfigDef 解析配置并生成值
         this.values = definition.parse(this.originals);
-        // 处理解析后的配置，返回的 map 会被用于更新配置
+
+        // step 3 - 处理解析后的配置，返回的 map 会被用于更新配置
         // ProducerConfig 会通过这个方法来更新 reconnect、acks、idempotence、transactionalId、client.id 等配置
         Map<String, Object> configUpdates = postProcessParsedConfig(Collections.unmodifiableMap(this.values));
         for (Map.Entry<String, Object> update : configUpdates.entrySet()) {
@@ -158,7 +158,8 @@ public class AbstractConfig {
         // 这种双重解析的方式确保了配置的完整性和一致性，特别是在某些配置值可能依赖于其他配置值的情况下。
         definition.parse(this.values);
         this.definition = definition;
-        // 如果需要，记录所有配置
+
+        // step 4 - 如果需要，记录所有配置
         if (doLog)
             logAll();
     }

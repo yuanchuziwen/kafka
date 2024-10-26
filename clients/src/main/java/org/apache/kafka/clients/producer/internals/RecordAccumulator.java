@@ -269,12 +269,14 @@ public final class RecordAccumulator {
             }
 
             // we don't have an in-progress record batch try to allocate a new batch
+
             // 如果没有进行中的批次，尝试分配新批次
             // Producer 的 doSend 方法会尝试调用两次 append 方法，第一次调用的时候就会传递 abortOnNewBatch 为 true
             // 此时 append 方法会返回一个 RecordAppendResult 对象，其中的 abortEvictBatch 为 true，表示需要创建新的批次
             // 然后 Producer 会调用 partitioner 的 onNewBatch 方法，然后再次调用 append 方法，此时 abortOnNewBatch 为 false
             if (abortOnNewBatch) {
                 // Return a result that will cause another call to append.
+
                 // 返回结果，触发再次调用 append
                 return new RecordAppendResult(null, false, false, true);
             }
@@ -287,6 +289,7 @@ public final class RecordAccumulator {
             buffer = free.allocate(size, maxTimeToBlock);
 
             // Update the current time in case the buffer allocation blocked above.
+
             // 更新当前时间，万一上面的缓冲分配被阻塞
             nowMs = time.milliseconds();
             // 加锁，防止多线程并发访问
@@ -294,6 +297,7 @@ public final class RecordAccumulator {
             // 锁的都是 Deque<ProducerBatch> dq，也就是每个主题分区对应的批次队列
             synchronized (dq) {
                 // Need to check if producer is closed again after grabbing the dequeue lock.
+
                 // 再次检查生产者是否已关闭
                 if (closed)
                     throw new KafkaException("Producer closed while send in progress");
@@ -303,13 +307,14 @@ public final class RecordAccumulator {
                 RecordAppendResult appendResult = tryAppend(timestamp, key, value, headers, callback, dq, nowMs);
                 if (appendResult != null) {
                     // Somebody else found us a batch, return the one we waited for! Hopefully this doesn't happen often...
+                    // 别人找到了一个批次，返回我们等待的批次！希望这种情况不会经常发生...
                     return appendResult;
                 }
 
                 // 创建新的批次并追加记录
-                // 基于之前 allocate 的 buffer 和 magic 数创建 MemoryRecordsBuilder
+                // 基于之前 allocate 的 byteBuffer 和 magic 数创建 MemoryRecordsBuilder
                 MemoryRecordsBuilder recordsBuilder = recordsBuilder(buffer, maxUsableMagic);
-                // 基于 topicPartition、recordsBuilder 和 nowMs 创建一个新的 batch
+                // 基于 topicPartition、MemoryRecordsBuilder 和 nowMs 创建一个新的 ProducerBatch
                 ProducerBatch batch = new ProducerBatch(tp, recordsBuilder, nowMs);
                 // 调用 batch.tryAppend 方法，并保证 append 成功，否则抛异常
                 FutureRecordMetadata future = Objects.requireNonNull(batch.tryAppend(timestamp, key, value, headers,
@@ -322,6 +327,7 @@ public final class RecordAccumulator {
                 incomplete.add(batch);
 
                 // Don't deallocate this buffer in the finally block as it's being used in the record batch
+
                 // 清空 buffer 引用，防止在 finally 块中被释放
                 buffer = null;
                 return new RecordAppendResult(future, dq.size() > 1 || batch.isFull(), true, false);

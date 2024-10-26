@@ -472,6 +472,7 @@ public class ConfigDef {
      */
     public Map<String, Object> parse(Map<?, ?> props) {
         // Check all configurations are defined
+        // 在 props 中找是否存在未在 ConfigDef 中定义的配置
         List<String> undefinedConfigKeys = undefinedDependentConfigs();
         if (!undefinedConfigKeys.isEmpty()) {
             String joined = Utils.join(undefinedConfigKeys, ",");
