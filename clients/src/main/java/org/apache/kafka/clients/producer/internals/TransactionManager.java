@@ -939,6 +939,7 @@ public class TransactionManager {
 
     // Attempts to resolve unresolved sequences. If all in-flight requests are complete and some partitions are still
     // unresolved, either bump the epoch if possible, or transition to a fatal error
+
     // 尝试解析序列。
     // 如果所有未完成的请求都已完结，并且某些分区仍然未解析，则要么可以增加 epoch，要么转换为致命错误
     synchronized void maybeResolveSequences() {

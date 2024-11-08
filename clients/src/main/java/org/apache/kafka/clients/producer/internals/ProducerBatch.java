@@ -378,6 +378,7 @@ public final class ProducerBatch {
         Iterator<Thunk> thunkIter = thunks.iterator();
         // We always allocate batch size because we are already splitting a big batch.
         // And we also Retain the create time of the original batch.
+
         // 我们总是分配 batch size，因为我们正在拆分一个大 batch。
         // 我们还保留了原始 batch 的创建时间。
         ProducerBatch batch = null;
@@ -389,6 +390,7 @@ public final class ProducerBatch {
             Thunk thunk = thunkIter.next();
             // 如果此时 batch 为空，则创建一个新的 batch
             if (batch == null)
+                // 注意这个方法名，它表示在 accumulator 之外创建一个 batch；即它不会依赖 accumulator 中的 bufferPool 的管理
                 batch = createBatchOffAccumulatorForRecord(record, splitBatchSize);
 
             // A newly created batch can always host the first message.

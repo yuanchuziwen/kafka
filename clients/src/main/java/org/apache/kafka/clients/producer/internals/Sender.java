@@ -477,11 +477,12 @@ public class Sender implements Runnable {
         RecordAccumulator.ReadyCheckResult result = this.accumulator.ready(cluster, now);
 
         // if there are any partitions whose leaders are not known yet, force metadata update
-        // 如果某些分区的领导者未知，则强制更新元数据
+        // 如果某些 partition 的 leader replica 在哪个 node 未知，则强制更新元数据
         if (!result.unknownLeaderTopics.isEmpty()) {
             // The set of topics with unknown leader contains topics with leader election pending as well as
             // topics which may have expired. Add the topic again to metadata to ensure it is included
             // and request metadata update, since there are messages to send to the topic.
+
             // 将这些主题添加到元数据中，并请求元数据更新，因为这些主题有数据要发送
             for (String topic : result.unknownLeaderTopics)
                 this.metadata.add(topic, now);
@@ -732,6 +733,7 @@ public class Sender implements Runnable {
         RequestHeader requestHeader = response.requestHeader();
         // 获取 correlationId，即请求对应的唯一标识，方便 client 和 server 进行匹配
         int correlationId = requestHeader.correlationId();
+
         // 如果节点断开连接，则记录日志，并完成所有批次
         if (response.wasDisconnected()) {
             log.trace("Cancelled request with header {} due to node {} being disconnected",
@@ -747,6 +749,7 @@ public class Sender implements Runnable {
                     response, response.destination(), response.versionMismatch());
             for (ProducerBatch batch : batches.values())
                 completeBatch(batch, new ProduceResponse.PartitionResponse(Errors.UNSUPPORTED_VERSION), correlationId, now);
+
         } else {
             log.trace("Received produce response from node {} with correlation id {}", response.destination(), correlationId);
             // if we have a response, parse it
@@ -757,24 +760,26 @@ public class Sender implements Runnable {
                 // Sender 应该使用 PartitionProduceResponse 而不是 ProduceResponse.PartitionResponse
                 ProduceResponse produceResponse = (ProduceResponse) response.responseBody();
                 // 遍历 produceResponse 中的每个分区响应
-                produceResponse.data().responses().forEach(r -> r.partitionResponses().forEach(p -> {
-                    TopicPartition tp = new TopicPartition(r.name(), p.index());
-                    // 创建一个 PartitionProduceResponse 对象，用于存储分区响应
-                    ProduceResponse.PartitionResponse partResp = new ProduceResponse.PartitionResponse(
-                            Errors.forCode(p.errorCode()),
-                            p.baseOffset(),
-                            p.logAppendTimeMs(),
-                            p.logStartOffset(),
-                            p.recordErrors()
-                                    .stream()
-                                    .map(e -> new ProduceResponse.RecordError(e.batchIndex(), e.batchIndexErrorMessage()))
-                                    .collect(Collectors.toList()),
-                            p.errorMessage());
-                    // 获取与分区对应的 ProducerBatch 对象
-                    ProducerBatch batch = batches.get(tp);
-                    // 完成批次
-                    completeBatch(batch, partResp, correlationId, now);
-                }));
+                produceResponse.data().responses()
+                        .forEach(r -> r.partitionResponses()
+                                .forEach(p -> {
+                                    TopicPartition tp = new TopicPartition(r.name(), p.index());
+                                    // 创建一个 PartitionProduceResponse 对象，用于存储分区响应
+                                    ProduceResponse.PartitionResponse partResp = new ProduceResponse.PartitionResponse(
+                                            Errors.forCode(p.errorCode()),
+                                            p.baseOffset(),
+                                            p.logAppendTimeMs(),
+                                            p.logStartOffset(),
+                                            p.recordErrors()
+                                                    .stream()
+                                                    .map(e -> new ProduceResponse.RecordError(e.batchIndex(), e.batchIndexErrorMessage()))
+                                                    .collect(Collectors.toList()),
+                                            p.errorMessage());
+                                    // 获取与分区对应的 ProducerBatch 对象
+                                    ProducerBatch batch = batches.get(tp);
+                                    // 完成批次
+                                    completeBatch(batch, partResp, correlationId, now);
+                                }));
                 this.sensors.recordLatency(response.destination(), response.requestLatencyMs());
             } else {
                 // this is the acks = 0 case, just complete all requests
@@ -960,8 +965,7 @@ public class Sender implements Runnable {
     private void failBatch(
             ProducerBatch batch,
             RuntimeException topLevelException,
-            boolean adjustSequenceNumbers
-    ) {
+            boolean adjustSequenceNumbers) {
         failBatch(batch, topLevelException, batchIndex -> topLevelException, adjustSequenceNumbers);
     }
 
@@ -969,8 +973,7 @@ public class Sender implements Runnable {
             ProducerBatch batch,
             RuntimeException topLevelException,
             Function<Integer, RuntimeException> recordExceptions,
-            boolean adjustSequenceNumbers
-    ) {
+            boolean adjustSequenceNumbers) {
         if (transactionManager != null) {
             transactionManager.handleFailedBatch(batch, topLevelException, adjustSequenceNumbers);
         }
@@ -1043,6 +1046,7 @@ public class Sender implements Runnable {
             // client before sending. This is intended to handle edge cases around cluster upgrades where brokers may
             // not all support the same message format version. For example, if a partition migrates from a broker
             // which is supporting the new magic version to one which doesn't, then we will need to convert.
+
             // 如果必要，将 records 向下转换为使用的最小 magic 版本
             // 通常，producer 开始构建 batch 和 IOThread 发送请求之间可能存在延迟，我们可能根据过时的元数据选择消息格式。
             // 在最坏的情况下，我们乐观地选择使用新的消息格式，但发现 broker 不支持它，因此我们需要在发送之前在客户端进行向下转换。

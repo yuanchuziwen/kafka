@@ -487,6 +487,7 @@ public final class RecordAccumulator {
         // Reset the estimated compression ratio to the initial value or the big batch compression ratio, whichever
         // is bigger. There are several different ways to do the reset. We chose the most conservative one to ensure
         // the split doesn't happen too often.
+
         // 将估计的压缩比重置为初始值或大批次的压缩比，以较大者为准。
         // 有几种不同的方法可以重置。我们选择了最保守的方法，以确保分割不会太频繁。
         CompressionRatioEstimator.setEstimation(bigBatch.topicPartition.topic(), compression,
@@ -509,7 +510,7 @@ public final class RecordAccumulator {
                     transactionManager.addInFlightBatch(batch);
                     insertInSequenceOrder(partitionDequeue, batch);
                 } else {
-                    // 这里也是放在了队首
+                    // 这里是将 batch 放到 deque 的队首，也就是说它会被优先发送
                     partitionDequeue.addFirst(batch);
                 }
             }
@@ -707,36 +708,57 @@ public final class RecordAccumulator {
     private boolean shouldStopDrainBatchesForPartition(ProducerBatch first, TopicPartition tp) {
         ProducerIdAndEpoch producerIdAndEpoch = null;
         if (transactionManager != null) {
+            // 如果 partition 在事务中，那么就不允许发送消息
             if (!transactionManager.isSendToPartitionAllowed(tp))
                 return true;
 
+            // 如果此时 producer 的 id 和 epoch 无效，那么也不允许发送消息
             producerIdAndEpoch = transactionManager.producerIdAndEpoch();
             if (!producerIdAndEpoch.isValid())
                 // we cannot send the batch until we have refreshed the producer id
                 return true;
 
+            // 如果 batch 没有序列号
             if (!first.hasSequence()) {
+                // 如果 partition 有 in-flight 的批次，并且有过期的 producer id 和 epoch，那么就不允许发送消息
                 if (transactionManager.hasInflightBatches(tp) && transactionManager.hasStaleProducerIdAndEpoch(tp)) {
                     // Don't drain any new batches while the partition has in-flight batches with a different epoch
                     // and/or producer ID. Otherwise, a batch with a new epoch and sequence number
                     // 0 could be written before earlier batches complete, which would cause out of sequence errors
+
+                    // 不要在分区有不同 epoch 和/或 producer ID 的 in-flight 批次的情况下排空任何新批次。
+                    // 否则，一个具有新 epoch 和序列号 0 的批次可能会在早期批次完成之前写入，
+                    // 这将导致序列错误
                     return true;
                 }
 
+                // 如果 partition 有未解决的序列号，那么也不允许发送消息
                 if (transactionManager.hasUnresolvedSequence(first.topicPartition))
                     // Don't drain any new batches while the state of previous sequence numbers
                     // is unknown. The previous batches would be unknown if they were aborted
                     // on the client after being sent to the broker at least once.
+
+                    // 在之前的序列号状态未知的情况下，不要排空任何新批次。
+                    // 如果它们在至少发送到 broker 一次后在客户端上被中止，那么之前的批次将是未知的。
                     return true;
             }
 
+            // 取到 partition 的第一个 in-flight 的序列号
             int firstInFlightSequence = transactionManager.firstInFlightSequence(first.topicPartition);
+            // 如果 partition 的第一个 in-flight 的序列号不是 NO_SEQUENCE，
+            // 并且 batch 有序列号，
+            // 并且 batch 的序列号不等于 partition 的第一个 in-flight 的序列号
             if (firstInFlightSequence != RecordBatch.NO_SEQUENCE && first.hasSequence()
                     && first.baseSequence() != firstInFlightSequence)
                 // If the queued batch already has an assigned sequence, then it is being retried.
                 // In this case, we wait until the next immediate batch is ready and drain that.
                 // We only move on when the next in line batch is complete (either successfully or due to
                 // a fatal broker error). This effectively reduces our in flight request count to 1.
+
+                // 如果排队的批次已经有一个分配的序列号，那么它正在重试。
+                // 在这种情况下，我们等到下一个即将到来的批次准备就绪，并排空它。
+                // 只有在下一个排队的批次完成（无论是成功还是由于致命的 broker 错误）后，我们才会继续。
+                // 这实际上将我们的 in-flight 请求计数减少到 1。
                 return true;
         }
         return false;
@@ -761,6 +783,7 @@ public final class RecordAccumulator {
         // 下面的这个 do-while 循环，会遍历所有分区，将可以发送的批次添加到 ready 列表中
         // drainIndex 的设计能保证每次循环都从上次遍历的位置开始，直到遍历完所有分区；
 
+        // 注意：此时没加锁
         // 计算起始索引
         int start = drainIndex = drainIndex % parts.size();
         do {
@@ -768,7 +791,7 @@ public final class RecordAccumulator {
             PartitionInfo part = parts.get(drainIndex);
             // 创建 TopicPartition 对象
             TopicPartition tp = new TopicPartition(part.topic(), part.partition());
-            // 更新下一次迭代的索引
+            // 更新下一次迭代的索引（注意：这里直接赋值给了成员变量）
             this.drainIndex = (this.drainIndex + 1) % parts.size();
 
             // Only proceed if the partition has no in-flight batches.
@@ -783,7 +806,7 @@ public final class RecordAccumulator {
             if (deque == null)
                 continue;
 
-            // 加锁
+            // 注意，这个时候才加锁，并且粒度是 partition 对应的 deque
             synchronized (deque) {
                 // invariant: !isMuted(tp,now) && deque != null
                 // 获取双端队列的第一个批次
@@ -801,7 +824,7 @@ public final class RecordAccumulator {
                     continue;
 
                 // 如果在增加了这个批次之后，大小超过了 maxSize && 此时 ready 中已经有的准备发送的批次，那么就跳出循环
-                // 注意，这里有两个判断条件；如果大小超过了，但是此时 ready 是空的，那么也可能会发送这条消息（猜测是去触发 split？）
+                // 注意，这里有两个判断条件；此时 ready 是空的，那么即使大小超过了，也会发送这条消息（猜测是去触发 split？）
                 if (size + first.estimatedSizeInBytes() > maxSize && !ready.isEmpty()) {
                     // there is a rare case that a single batch size is larger than the request size due to
                     // compression; in this case we will still eventually send this batch in a single request
@@ -818,7 +841,10 @@ public final class RecordAccumulator {
                     // 获取生产者 ID 和 epoch
                     ProducerIdAndEpoch producerIdAndEpoch =
                             transactionManager != null ? transactionManager.producerIdAndEpoch() : null;
-                    // 获取第一个批次，这里会从 deque 中移除
+
+                    // 获取第一个批次，这里会从 deque 中移除；
+                    // 这个批次从 record accumulator 解脱了；
+                    // 也就是说，过了这一行之后，就保证一定会发送这个批次了；
                     ProducerBatch batch = deque.pollFirst();
                     // 如果生产者 ID 和 epoch 不为空，并且批次没有序列号，跳过
                     if (producerIdAndEpoch != null && !batch.hasSequence()) {
@@ -826,9 +852,10 @@ public final class RecordAccumulator {
                         // of the producer, we update it and reset the sequence. This should be
                         // only done when all its in-flight batches have completed. This is guarantee
                         // in `shouldStopDrainBatchesForPartition`.
-                        // 如果分区的生产者ID/epoch与生产者的最新ID/epoch不匹配，
+
+                        // 如果分区的生产者 ID/epoch 与生产者的最新 ID/epoch 不匹配，
                         // 我们更新它并重置序列号。这应该只在所有正在传输的批次都完成时进行。
-                        // 这在`shouldStopDrainBatchesForPartition`中得到保证。
+                        // 这在 `shouldStopDrainBatchesForPartition` 中得到保证。
                         transactionManager.maybeUpdateProducerIdAndEpoch(batch.topicPartition);
 
                         // If the batch already has an assigned sequence, then we should not change the producer id and
@@ -1116,7 +1143,7 @@ public final class RecordAccumulator {
     }
 
     /**
-     * 将指定主题分区静音，其实是添加到 muted 集合中
+     * 将指定 partition 静音，其实是添加到 muted 集合中；等到消息发送成功之后，才会解锁
      *
      * @param tp
      */

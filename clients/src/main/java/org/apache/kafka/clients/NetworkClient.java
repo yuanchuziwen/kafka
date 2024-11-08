@@ -630,6 +630,7 @@ public class NetworkClient implements KafkaClient {
         if (!abortedSends.isEmpty()) {
             // If there are aborted sends because of unsupported version exceptions or disconnects,
             // handle them immediately without waiting for Selector#poll.
+
             // 如果有因为不支持的版本异常或断开而中止的发送请求，则立即处理它们，而不需要等待 Selector#poll。
             List<ClientResponse> responses = new ArrayList<>();
             // 将 `abortedSends` 添加到 `responses` 列表中，并清空 `abortedSends` 列表。
@@ -998,10 +999,13 @@ public class NetworkClient implements KafkaClient {
      * @param now The current time
      */
     private void handleCompletedReceives(List<ClientResponse> responses, long now) {
+        // 获取 selector 上次 poll 之后收到的响应
         for (NetworkReceive receive : this.selector.completedReceives()) {
+            // 根据 receive 的 source 获取对应的 InFlightRequest
             String source = receive.source();
             InFlightRequest req = inFlightRequests.completeNext(source);
 
+            // 解析 receive 的 payload，构造一个 AbstractResponse 对象
             AbstractResponse response = parseResponse(receive.payload(), req.header);
             if (throttleTimeSensor != null)
                 throttleTimeSensor.record(response.throttleTimeMs(), now);
@@ -1013,8 +1017,10 @@ public class NetworkClient implements KafkaClient {
 
             // If the received response includes a throttle delay, throttle the connection.
             maybeThrottle(response, req.header.apiVersion(), req.destination, now);
+            // 针对元数据更新的 response，更新 metadata
             if (req.isInternalRequest && response instanceof MetadataResponse)
                 metadataUpdater.handleSuccessfulResponse(req.header, now, (MetadataResponse) response);
+            // 针对 ApiVersionsRequest 的 response，处理 API 版本请求
             else if (req.isInternalRequest && response instanceof ApiVersionsResponse)
                 handleApiVersionsResponse(responses, req, now, (ApiVersionsResponse) response);
             else
@@ -1110,6 +1116,7 @@ public class NetworkClient implements KafkaClient {
                 // the ApiVersionsRequest is queued up to be sent out. Without this, the client
                 // could remain in the CHECKING_API_VERSIONS state forever if the channel does
                 // not before ready.
+
                 // 仅当 ApiVersionsRequest 排队等待发送时，我们才将连接转换为 CHECKING_API_VERSIONS 状态。
                 // 否则，如果通道在准备好之前不会保持 CHECKING_API_VERSIONS 状态，客户端可能会永远保持 CHECKING_API_VERSIONS 状态。
                 this.connectionStates.checkingApiVersions(node);

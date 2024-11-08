@@ -1311,7 +1311,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
 
                 // 再次将记录附加到累加器（注意：abortOnNewBatch=false）
                 result = accumulator.append(tp, timestamp, serializedKey,
-                    serializedValue, headers, interceptCallback, remainingWaitMs, false, nowMs);
+                        serializedValue, headers, interceptCallback, remainingWaitMs, false, nowMs);
             }
 
             if (transactionManager != null && transactionManager.isTransactional())

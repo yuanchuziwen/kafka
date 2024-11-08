@@ -127,6 +127,7 @@ public class Selector implements Selectable, AutoCloseable {
 
     //indicates if the previous call to poll was able to make progress in reading already-buffered data.
     //this is used to prevent tight loops when memory is not available to read any more data
+
     // 指示上一次调用 poll 是否能够在读取已缓冲数据时取得进展。
     // 当没有内存可用于读取更多数据时，这用于防止紧密循环
     private boolean madeReadProgressLastPoll = true;
@@ -653,6 +654,7 @@ public class Selector implements Selectable, AutoCloseable {
 
                 //if channel is ready and has bytes to read from socket or buffer, and has no
                 //previous completed receive then read from it
+
                 // 如果通道已准备好并且有字节从套接字或缓冲区读取，并且没有先前完成的接收，则从中读取
                 if (channel.ready() && (key.isReadable() || channel.hasBytesBuffered()) && !hasCompletedReceive(channel)
                         && !explicitlyMutedChannels.contains(channel)) {
@@ -666,6 +668,7 @@ public class Selector implements Selectable, AutoCloseable {
                     //next poll call otherwise data may be stuck in said buffers forever. If we attempt
                     //to process buffered data and no progress is made, the channel buffered status is
                     //cleared to avoid the overhead of checking every time.
+
                     // 该通道在中间缓冲区中排队的字节我们无法读取（可能是因为没有内存）。
                     // 可能在下一个 poll() 中底层套接字不会出现，因此我们需要记住这个通道以便下一个 poll 调用，
                     // 否则数据可能会永远卡在这些缓冲区中。如果我们尝试处理缓冲数据但没有进展，则清除通道缓冲状态以避免每次检查的开销。
@@ -732,10 +735,14 @@ public class Selector implements Selectable, AutoCloseable {
         NetworkSend send = channel.maybeCompleteSend();
         // We may complete the send with bytesSent < 1 if `TransportLayer.hasPendingWrites` was true and `channel.write()`
         // caused the pending writes to be written to the socket channel buffer
+
+        // 我们可能会在 bytesSent < 1 的情况下完成发送，
+        // 如果 `TransportLayer.hasPendingWrites` 为 true 并且 `channel.write()` 导致待处理的写入被写入套接字通道缓冲区
         if (bytesSent > 0 || send != null) {
             long currentTimeMs = time.milliseconds();
             if (bytesSent > 0)
                 this.sensors.recordBytesSent(nodeId, bytesSent, currentTimeMs);
+            // 将发出去的 send 添加到 completedSends 中
             if (send != null) {
                 this.completedSends.add(send);
                 this.sensors.recordCompletedSend(nodeId, send.size(), currentTimeMs);
@@ -746,6 +753,7 @@ public class Selector implements Selectable, AutoCloseable {
     private Collection<SelectionKey> determineHandlingOrder(Set<SelectionKey> selectionKeys) {
         //it is possible that the iteration order over selectionKeys is the same every invocation.
         //this may cause starvation of reads when memory is low. to address this we shuffle the keys if memory is low.
+
         // 如果内存不足，可能会导致每次调用时选择键的迭代顺序相同。当内存不足时，可能会导致读取饥饿。
         // 为了解决这个问题，如果内存不足，我们会对键进行 shuffle。
         if (!outOfMemory && memoryPool.availableMemory() < lowMemThreshold) {
@@ -768,6 +776,7 @@ public class Selector implements Selectable, AutoCloseable {
 
             NetworkReceive receive = channel.maybeCompleteReceive();
             if (receive != null) {
+                // 将通过 channel 接收到的 receive 添加到 completedReceives 中
                 addToCompletedReceives(channel, receive, currentTimeMs);
             }
         }
