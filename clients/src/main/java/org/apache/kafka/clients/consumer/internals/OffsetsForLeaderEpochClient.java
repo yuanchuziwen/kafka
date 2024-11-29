@@ -79,6 +79,7 @@ public class OffsetsForLeaderEpochClient extends AsyncClient<
 
         Set<TopicPartition> partitionsToRetry = new HashSet<>(requestData.keySet());
         Set<String> unauthorizedTopics = new HashSet<>();
+        // partition 维度收集信息并返回
         Map<TopicPartition, EpochEndOffset> endOffsets = new HashMap<>();
 
         for (OffsetForLeaderTopicResult topic : response.data().topics()) {

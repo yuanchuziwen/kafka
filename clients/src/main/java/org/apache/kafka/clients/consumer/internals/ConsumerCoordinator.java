@@ -1119,13 +1119,15 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             if (pendingCommittedOffsetRequest != null) {
                 future = pendingCommittedOffsetRequest.response;
             } else {
+                // 发送 OffsetFetchRequest 请求
                 future = sendOffsetFetchRequest(partitions);
+                // 基于 OffsetFetchRequest 封装一个 PendingCommittedOffsetRequest，并且设置到成员变量中
                 pendingCommittedOffsetRequest = new PendingCommittedOffsetRequest(partitions, generationForOffsetRequest, future);
             }
             // 触发一次 io 操作
             client.poll(future, timer);
 
-            // 如果请求结束了
+            // 如果请求结束了；这里只是判断了一下，不会阻塞
             if (future.isDone()) {
                 // 清空 pendingCommittedOffsetRequest
                 pendingCommittedOffsetRequest = null;

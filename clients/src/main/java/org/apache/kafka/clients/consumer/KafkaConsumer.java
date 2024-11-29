@@ -1591,6 +1591,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
                 // make sure the offsets of topic partitions the consumer is unsubscribing from
                 // are committed since there will be no following rebalance
+
                 // 确保消费者取消订阅的主题分区的偏移量已提交，因为接下来不会有 rebalance
                 // AUTO subscription 可以不直接调用，他们会在 joinGroup 的时候调用？
                 if (coordinator != null)
@@ -1782,15 +1783,13 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
         // if data is available already, return it immediately
 
-        // 如果数据已经可用，则立即返回
+        // 如果数据已经可用，则立即返回；里面包含了解析等行为
         final Map<TopicPartition, List<ConsumerRecord<K, V>>> records = fetcher.fetchedRecords();
         if (!records.isEmpty()) {
             return records;
         }
 
         // send any new fetches (won't resend pending fetches)
-
-        // 如果数据已经可用，则立即返回
         fetcher.sendFetches();
 
         // We do not want to be stuck blocking in poll if we are missing some positions
@@ -3021,6 +3020,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
         fetcher.validateOffsetsIfNeeded();
 
         // 确认此时是否知晓了所有订阅分区的 fetch 位置
+        // 如果是的话，那么就跳过后续的 update
         cachedSubscriptionHashAllFetchPositions = subscriptions.hasAllFetchPositions();
         if (cachedSubscriptionHashAllFetchPositions) {
             return true;

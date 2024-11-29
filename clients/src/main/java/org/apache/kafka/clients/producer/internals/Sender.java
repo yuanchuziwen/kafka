@@ -442,10 +442,10 @@ public class Sender implements Runnable {
 
                 // Check whether we need a new producerId. If so, we will enqueue an InitProducerId
                 // request which will be sent below
-                // 如果需要新的生产者 ID，则发送 InitProducerId 请求
+                // 如果需要新的生产者 ID，则发送 InitProducerId 请求（只是幂等，也会调用）
                 transactionManager.bumpIdempotentEpochAndResetIdIfNeeded();
 
-                // 如果事务管理器有未完成的请求，则发送事务请求
+                // 如果事务管理器有未完成的请求，则发送事务请求（只是幂等，也会调用）
                 if (maybeSendAndPollTransactionalRequest()) {
                     return;
                 }
@@ -611,7 +611,7 @@ public class Sender implements Runnable {
             }
         }
 
-        // 获取下一个事务请求处理器
+        // 获取下一个事务请求处理器（内部会从事务的 pendingRequests 中取 request 对象）
         TransactionManager.TxnRequestHandler nextRequestHandler = transactionManager.nextRequest(accumulator.hasIncomplete());
         if (nextRequestHandler == null)
             return false;
@@ -621,7 +621,7 @@ public class Sender implements Runnable {
         try {
             // 获取下一个请求处理器的协调器类型
             FindCoordinatorRequest.CoordinatorType coordinatorType = nextRequestHandler.coordinatorType();
-            // 确定目标节点，即事务协调器节点
+            // 确定目标节点，即事务协调器节点（如果没有开启事务，那么就取负载最小的结点）
             targetNode = coordinatorType != null ?
                     transactionManager.coordinator(coordinatorType) :
                     client.leastLoadedNode(time.milliseconds());

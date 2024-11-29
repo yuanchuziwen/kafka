@@ -1237,6 +1237,8 @@ public class SubscriptionState {
 
             // 如果此时 position 为空，并且 leader 发生了变更，则基于入参的 metadata 信息初始化一个 fetchPosition，并进行验证
             if (position != null && !position.currentLeader.equals(currentLeaderAndEpoch)) {
+                // 其实这个 newPosition 的 offset 就是从当前 position 身上取到的；
+                // 也就是说，最多只会更改 epoch 信息而已
                 FetchPosition newPosition = new FetchPosition(position.offset, position.offsetEpoch, currentLeaderAndEpoch);
                 validatePosition(newPosition);
                 preferredReadReplica = null;

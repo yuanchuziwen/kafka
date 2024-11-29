@@ -548,6 +548,7 @@ public class Fetcher<K, V> implements Closeable {
                 offsetResetTimestamps.put(partition, timestamp);
         }
 
+        // 进行异步的 reset 操作
         resetOffsetsAsync(offsetResetTimestamps);
     }
 
@@ -559,6 +560,7 @@ public class Fetcher<K, V> implements Closeable {
         for (Map.Entry<Node, Map<TopicPartition, ListOffsetsPartition>> entry : timestampsToSearchByNode.entrySet()) {
             Node node = entry.getKey();
             final Map<TopicPartition, ListOffsetsPartition> resetTimestamps = entry.getValue();
+            // 更新 backoff 时间
             subscriptions.setNextAllowedRetry(resetTimestamps.keySet(), time.milliseconds() + requestTimeoutMs);
 
             // 发送消息
@@ -652,15 +654,17 @@ public class Fetcher<K, V> implements Closeable {
 
         // Validate each partition against the current leader and epoch
         // If we see a new metadata version, check all partitions
-        // 验证所有分配的分区，如果检测到领导者的变化，则验证偏移量。
+
+        // 验证所有分配的分区，如果检测到领导者的变化，则验证偏移量，更新 epoch 信息
         validatePositionsOnMetadataChange();
 
         // Collect positions needing validation, with backoff
+
         // 收集需要验证的位置，使用退避策略
         Map<TopicPartition, FetchPosition> partitionsToValidate = subscriptions
-                .partitionsNeedingValidation(time.milliseconds())
+                .partitionsNeedingValidation(time.milliseconds()) // 取到需要验证的分区（且未 backoff 的）
                 .stream()
-                .filter(tp -> subscriptions.position(tp) != null)
+                .filter(tp -> subscriptions.position(tp) != null) // position 不是 null，即曾经拉取过了
                 .collect(Collectors.toMap(Function.identity(), subscriptions::position));
 
         // 验证所有分配的分区，如果检测到领导者的变化，则验证偏移量。
@@ -812,6 +816,7 @@ public class Fetcher<K, V> implements Closeable {
                             // The first condition ensures that the completedFetches is not stuck with the same completedFetch
                             // in cases such as the TopicAuthorizationException, and the second condition ensures that no
                             // potential data loss due to an exception in a following record.
+
                             // 如果拉取的记录为空 并且 没有拉取到的记录，则移除已完成拉取
                             // 第一个条件确保 completedFetches 不会被卡住，在某些情况下，例如 TopicAuthorizationException
                             // 第二个条件确保没有潜在的数据丢失，因为后续记录中的异常
@@ -850,6 +855,7 @@ public class Fetcher<K, V> implements Closeable {
                             // this case shouldn't usually happen because we only send one fetch at a time per partition,
                             // but it might conceivably happen in some rare cases (such as partition leader changes).
                             // we have to copy to a new list because the old one may be immutable
+
                             // 这种场景不应该经常发生，因为我们一次只对每个分区发送一个拉取请求，
                             // 但可能在某些罕见情况下发生（例如分区领导者更改）。
                             // 我们必须将记录复制到一个新列表中，因为旧列表可能是不可变的
@@ -869,6 +875,7 @@ public class Fetcher<K, V> implements Closeable {
         } finally {
             // add any polled completed fetches for paused partitions back to the completed fetches queue to be
             // re-evaluated in the next poll
+            // 将任何暂停分区的拉取的已完成拉取添加回 completed fetches 队列，以便在下一次轮询中重新评估
             completedFetches.addAll(pausedCompletedFetches);
         }
 
@@ -1015,6 +1022,7 @@ public class Fetcher<K, V> implements Closeable {
      * Requests are grouped by Node for efficiency.
      */
     private void validateOffsetsAsync(Map<TopicPartition, FetchPosition> partitionsToValidate) {
+        // 按照 node、partition 进行 group by
         final Map<Node, Map<TopicPartition, FetchPosition>> regrouped =
                 regroupFetchPositionsByLeader(partitionsToValidate);
 
@@ -1025,6 +1033,7 @@ public class Fetcher<K, V> implements Closeable {
                 return;
             }
 
+            // 如果 nodeApiVersions 为空，则尝试连接
             NodeApiVersions nodeApiVersions = apiVersions.get(node.idString());
             if (nodeApiVersions == null) {
                 client.tryConnect(node);
@@ -1035,14 +1044,17 @@ public class Fetcher<K, V> implements Closeable {
                 log.debug("Skipping validation of fetch offsets for partitions {} since the broker does not " +
                                 "support the required protocol version (introduced in Kafka 2.3)",
                         fetchPositions.keySet());
+                // 这个 fetchPosition 还是 subscriptionState 自己的
                 for (TopicPartition partition : fetchPositions.keySet()) {
                     subscriptions.completeValidation(partition);
                 }
                 return;
             }
 
+            // 这里应该是更新 backOff 时间
             subscriptions.setNextAllowedRetry(fetchPositions.keySet(), nextResetTimeMs);
 
+            // 这个奇怪的 client 只在这里用到了
             RequestFuture<OffsetForEpochResult> future =
                     offsetsForLeaderEpochClient.sendAsyncRequest(node, fetchPositions);
 
@@ -1061,6 +1073,8 @@ public class Fetcher<K, V> implements Closeable {
                     //
                     // In addition, check whether the returned offset and epoch are valid. If not, then we should reset
                     // its offset if reset policy is configured, or throw out of range exception.
+
+                    // 这里会基于 response 中的返回值，更新 subscriptionStates 中的信息，也就是说实际的 position 信息等将被改变了
                     offsetsResult.endOffsets().forEach((topicPartition, respEndOffset) -> {
                         FetchPosition requestPosition = fetchPositions.get(topicPartition);
                         Optional<SubscriptionState.LogTruncation> truncationOpt =
@@ -1342,6 +1356,7 @@ public class Fetcher<K, V> implements Closeable {
             subscriptions.assignedPartitions().forEach(topicPartition -> {
                 // 确认当前订阅的所有分区的 leader 和 epoch 是否发生了变化
                 ConsumerMetadata.LeaderAndEpoch leaderAndEpoch = metadata.currentLeader(topicPartition);
+                // 可能会更新 epoch 信息
                 subscriptions.maybeValidatePositionForCurrentLeader(apiVersions, topicPartition, leaderAndEpoch);
             });
         }
